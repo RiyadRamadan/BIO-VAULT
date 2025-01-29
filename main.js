@@ -1,47 +1,20 @@
-/***********************************************************************
- * main.js — Bio‑Vault Application with Biometric Authentication and 
- *            Bio‑Catch Popup + Session Restore
- * 
- * - Manages Vault data (encryption, storage, transactions)
- * - Implements Biometric Authentication using WebAuthn
- * - Handles Bio-Constant and UTC Time independently using device's UTC
- * - Implements Unique and Immutable Bio‑IBAN generation
- * - Manages Transactions with BioCatch numbers and validations
- * - Displays Bio-Catch number in a popup after Catch Out
- * - Enforces single vault per device, with persistent IndexedDB storage
- * - RESTORES the last visited page on reload (session resume)
- *
- * NEW: We embed the **sender**'s Bio‑IBAN in the Bio‑Catch string 
- * to guarantee it is restricted between the true sender & receiver.
- ***********************************************************************/
-
-// =========================
-// CONSTANTS AND CONFIGS
-// =========================
 const DB_NAME = 'BioVaultDB';
 const DB_VERSION = 1;
 const VAULT_STORE = 'vault';
-
 const EXCHANGE_RATE = 12;  // 1 USD = 12 TVM
 const INITIAL_BIO_CONSTANT = 1736565605;
 const TRANSACTION_VALIDITY_SECONDS = 720; // 12 minutes
 const LOCKOUT_DURATION_SECONDS = 3600; // 1 hour
 const MAX_AUTH_ATTEMPTS = 3;
-
-// For the advanced balance increments
 const BIO_LINE_INTERVAL = 15783000;     // 15,783,000
 const BIO_LINE_INCREMENT_AMOUNT = 15000; // 15,000 TVM per interval
-
-// =========================
-// GLOBAL VARIABLES
-// =========================
+const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
+const STORAGE_CHECK_INTERVAL = 300000; // 5 minutes
+const vaultSyncChannel = new BroadcastChannel('vault-sync');
 let vaultUnlocked = false;
 let derivedKey = null;  // cryptographic key after unlocking
 let bioLineInterval = null;
 
-/**
- * Vault Data Structure
- */
 let vaultData = {
   bioIBAN: null,
   // For dynamic increment logic
@@ -57,9 +30,7 @@ let vaultData = {
   initialBioConstant: INITIAL_BIO_CONSTANT
 };
 
-// =========================
-// HELPER: NUMBER FORMATTING
-// =========================
+
 function formatWithCommas(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
@@ -75,9 +46,6 @@ function formatDisplayDate(timestampInSeconds) {
   return `${datePart} ${timePart}`;
 }
 
-// =========================
-// EVENT LISTENERS
-// =========================
 window.addEventListener('DOMContentLoaded', () => {
   // === SESSION RESTORE SNIPPET: Resume the user's last page ===
   let lastURL = localStorage.getItem("last_session_url");
@@ -94,29 +62,50 @@ window.addEventListener('DOMContentLoaded', () => {
   initializeUI();
   loadVaultOnStartup();
   preventMultipleVaults(); // inter-tab sync
+    // Add these lines
+  enforceStoragePersistence();
+  
+  // Cross-tab sync handler
+  vaultSyncChannel.onmessage = async (e) => {
+    if (e.data?.type === 'vaultUpdate') {
+      try {
+        const { iv, data, salt } = e.data.payload;
+        const decrypted = await decryptData(
+          derivedKey, 
+          base64ToBuffer(iv), 
+          base64ToBuffer(data)
+        );
+        Object.assign(vaultData, decrypted);
+        populateWalletUI();
+        console.log('🔄 Synced vault across tabs');
+      } catch (err) {
+        console.error('Tab sync failed:', err);
+      }
+    }
+  };
 
-  // === Request persistent storage so IndexedDB won't be auto-cleared ===
-  requestPersistentStorage();
 });
 
-// =========================
-// PERSISTENT STORAGE REQUEST
-// =========================
-function requestPersistentStorage() {
-  if (navigator.storage && navigator.storage.persist) {
-    navigator.storage.persist().then((granted) => {
-      if (granted) {
-        console.log("🔒 Persistent storage granted — IndexedDB won't be cleared automatically.");
-      } else {
-        console.warn("⚠️ Storage might still be cleared under extreme conditions.");
-      }
-    });
+
+async function enforceStoragePersistence() {
+  if (!navigator.storage?.persist) return;
+
+  const persisted = await navigator.storage.persisted();
+  if (!persisted) {
+    const granted = await navigator.storage.persist();
+    console.log(granted ? '🔒 Storage hardened' : '⚠️ Storage vulnerable');
   }
+
+  // Storage health monitor
+  setInterval(async () => {
+    const estimate = await navigator.storage.estimate();
+    if ((estimate.usage / estimate.quota) > 0.85) {
+      console.warn('🚨 Storage critical:', estimate);
+      alert('❗ Vault storage nearing limit! Export backup!');
+    }
+  }, STORAGE_CHECK_INTERVAL);
 }
 
-// =========================
-// SALT MANAGEMENT
-// =========================
 
 function generateSalt() {
   return crypto.getRandomValues(new Uint8Array(16)); // 128-bit salt
@@ -149,9 +138,6 @@ function base64ToBuffer(base64) {
   }
 }
 
-// =========================
-// KEY DERIVATION FUNCTION
-// =========================
 
 async function deriveKeyFromPIN(pin, salt) {
   const encoder = new TextEncoder();
@@ -181,9 +167,6 @@ async function deriveKeyFromPIN(pin, salt) {
   return derivedKey;
 }
 
-// =========================
-// CRYPTOGRAPHY FUNCTIONS
-// =========================
 
 async function performBiometricAuthentication() {
   try {
@@ -225,9 +208,6 @@ async function decryptData(key, iv, ciphertext) {
   return JSON.parse(dec.decode(plainBuffer));
 }
 
-// =========================
-// BIO‑CATCH OBFUSCATION
-// =========================
 
 async function encryptBioCatchNumber(plainText) {
   try {
@@ -247,9 +227,6 @@ async function decryptBioCatchNumber(encryptedString) {
   }
 }
 
-// =========================
-// INDEXEDDB FUNCTIONS
-// =========================
 
 function openVaultDB() {
   return new Promise((resolve, reject) => {
@@ -331,9 +308,6 @@ async function clearVaultDB() {
   });
 }
 
-// =========================
-// VAULT CREATION / ACCESS
-// =========================
 
 async function createNewVault(pin) {
   const stored = await loadVaultDataFromDB();
@@ -466,22 +440,36 @@ function lockVault() {
 
 async function persistVaultData(salt = null) {
   try {
-    if (!derivedKey) {
-      throw new Error('🔴 Derived key not available. Cannot encrypt vault data.');
-    }
-    const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
+    if (!derivedKey) throw new Error('🔴 No encryption key');
 
-    let saltBase64 = null;
-    if (salt) {
-      saltBase64 = bufferToBase64(salt);
-    } else {
-      const stored = await loadVaultDataFromDB();
-      if (stored && stored.salt) {
-        saltBase64 = bufferToBase64(stored.salt);
-      } else {
-        throw new Error('🔴 Salt not found. Cannot persist vault data.');
-      }
-    }
+    // Existing encryption logic
+    const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
+    const saltBase64 = salt ? bufferToBase64(salt) : (await loadVaultDataFromDB())?.salt;
+
+    // 1. Original IndexedDB Save
+    await saveVaultDataToDB(iv, ciphertext, saltBase64);
+
+    // 2. Emergency localStorage Backup (Encrypted)
+    const backupPayload = {
+      iv: bufferToBase64(iv),
+      data: bufferToBase64(ciphertext),
+      salt: saltBase64,
+      timestamp: Date.now()
+    };
+    localStorage.setItem(VAULT_BACKUP_KEY, JSON.stringify(backupPayload));
+
+    // 3. Cross-tab Sync
+    vaultSyncChannel.postMessage({
+      type: 'vaultUpdate',
+      payload: backupPayload
+    });
+
+    console.log('💾 Triply-redundant persistence complete');
+  } catch (err) {
+    console.error('💥 Persistence failed:', err);
+    alert('🚨 CRITICAL: VAULT BACKUP FAILED! EXPORT IMMEDIATELY!');
+  }
+}
 
     await saveVaultDataToDB(iv, ciphertext, saltBase64);
     console.log('✅ Vault data saved to DB successfully.');
@@ -504,21 +492,35 @@ function showVaultUI() {
 }
 
 async function loadVaultOnStartup() {
-  const stored = await loadVaultDataFromDB();
-  if (stored && stored.iv && stored.ciphertext && stored.salt) {
-    document.getElementById('enterVaultBtn').style.display = 'block';
-    document.getElementById('lockedScreen').classList.remove('hidden');
-    document.getElementById('vaultUI').classList.add('hidden');
-  } else {
-    document.getElementById('enterVaultBtn').style.display = 'block';
-    document.getElementById('lockedScreen').classList.remove('hidden');
-    document.getElementById('vaultUI').classList.add('hidden');
+  try {
+    // 1. Try primary IndexedDB
+    let stored = await loadVaultDataFromDB();
+
+    // 2. Fallback to localStorage backup
+    if (!stored) {
+      const backup = localStorage.getItem(VAULT_BACKUP_KEY);
+      if (backup) {
+        stored = JSON.parse(backup);
+        stored.iv = base64ToBuffer(stored.iv);
+        stored.ciphertext = base64ToBuffer(stored.data);
+        console.log('♻️ Restored from localStorage backup');
+      }
+    }
+
+    // Existing UI logic
+    if (stored) {
+      document.getElementById('enterVaultBtn').style.display = 'block';
+      document.getElementById('lockedScreen').classList.remove('hidden');
+    } else {
+      document.getElementById('enterVaultBtn').style.display = 'block';
+      document.getElementById('lockedScreen').classList.remove('hidden');
+    }
+  } catch (err) {
+    console.error('🔥 Backup restoration failed:', err);
+    localStorage.removeItem(VAULT_BACKUP_KEY);
   }
 }
 
-// =========================
-// SINGLE-VAULT ENFORCEMENT
-// =========================
 
 function preventMultipleVaults() {
   window.addEventListener('storage', (event) => {
@@ -549,9 +551,6 @@ function enforceSingleVault() {
   }
 }
 
-// =========================
-// WALLET UI
-// =========================
 
 function populateWalletUI() {
   document.getElementById('bioibanInput').value = vaultData.bioIBAN || 'BIO...';
@@ -671,9 +670,6 @@ function handleCopyBioIBAN() {
     });
 }
 
-// =========================
-// BIO-CONSTANT & UTC TIME
-// =========================
 
 function initializeBioConstantAndUTCTime() {
   if (bioLineInterval) clearInterval(bioLineInterval);
@@ -696,9 +692,6 @@ function initializeBioConstantAndUTCTime() {
   }, 1000);
 }
 
-// =========================
-// POPUP FUNCTIONS
-// =========================
 
 function showBioCatchPopup(encryptedBioCatch) {
   const bioCatchPopup = document.getElementById('bioCatchPopup');
@@ -708,9 +701,6 @@ function showBioCatchPopup(encryptedBioCatch) {
   bioCatchPopup.style.display = 'flex';
 }
 
-// =========================
-// UI INITIALIZATION
-// =========================
 
 function initializeUI() {
   const enterVaultBtn = document.getElementById('enterVaultBtn');
@@ -764,15 +754,9 @@ function initializeUI() {
   enforceSingleVault(); // ensure single vault on device
 }
 
-// =========================
-// TRANSACTION HANDLERS
-// =========================
 
 let transactionLock = false;
 
-/**
- * Generate a Bio-Catch code that includes the sender IBAN as a 4th segment.
- */
 function generateBioCatchNumber(senderBioIBAN, receiverBioIBAN, amount, timestamp) {
   const senderNumeric = parseInt(senderBioIBAN.slice(3));
   const receiverNumeric = parseInt(receiverBioIBAN.slice(3));
@@ -834,9 +818,7 @@ function validateBioIBAN(bioIBAN) {
   return (derivedTimestamp > 0 && derivedTimestamp <= currentUTCTimestamp);
 }
 
-/**
- * SEND / CATCH OUT (irreversible)
- */
+
 async function handleSendTransaction() {
   if (!vaultUnlocked) {
     alert('❌ Please unlock the vault first.');
@@ -922,9 +904,6 @@ async function handleSendTransaction() {
   }
 }
 
-/**
- * RECEIVE / CATCH IN
- */
 async function handleReceiveTransaction() {
   if (!vaultUnlocked) {
     alert('❌ Please unlock the vault first.');
@@ -1031,9 +1010,6 @@ async function handleReceiveTransaction() {
   }
 }
 
-// =========================
-// LOCKOUT CHECK
-// =========================
 
 function isVaultLockedOut() {
   if (vaultData.lockoutTimestamp) {
