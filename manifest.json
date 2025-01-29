@@ -1,7 +1,7 @@
 {
   "name": "P2P Bio‑Vault",
   "short_name": "BioVault",
-  "start_url": "../index.html",
+  "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#000000",
