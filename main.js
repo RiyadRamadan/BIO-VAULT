@@ -574,28 +574,39 @@ function enforceSingleVault() {
 }
 
 function populateWalletUI() {
+  // Set the Bio-IBAN in the input field
   document.getElementById('bioibanInput').value = vaultData.bioIBAN || 'BIO...';
 
+  // Calculate dynamic increments based on BIO-Line intervals
   const bioLineProgress = vaultData.bioConstant - vaultData.initialBioConstant;
   const completedIntervals = Math.floor(bioLineProgress / BIO_LINE_INTERVAL);
-
   const dynamicBaseTVM = vaultData.initialBalanceTVM + (completedIntervals * BIO_LINE_INCREMENT_AMOUNT);
 
-  // Only bump up if last transaction wasn't a "sent" type
-  const lastTx = vaultData.transactions[vaultData.transactions.length - 1] || null;
-  const lastTxIsSent = lastTx && lastTx.type === 'sent';
-  if (!lastTxIsSent && vaultData.balanceTVM < dynamicBaseTVM) {
-    vaultData.balanceTVM = dynamicBaseTVM;
-  }
+  // Calculate total received TVM
+  const receivedTVM = vaultData.transactions
+    .filter(tx => tx.type === 'received')
+    .reduce((acc, tx) => acc + tx.amount, 0);
 
+  // Calculate total sent TVM
+  const sentTVM = vaultData.transactions
+    .filter(tx => tx.type === 'sent')
+    .reduce((acc, tx) => acc + tx.amount, 0);
+
+  // Update balanceTVM: Initial + Received - Sent + Dynamic Increments
+  vaultData.balanceTVM = vaultData.initialBalanceTVM + receivedTVM - sentTVM + dynamicBaseTVM;
+
+  // Update balanceUSD based on the updated balanceTVM
   vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
 
+  // Format balances with commas for better readability
   const tvmFormatted = formatWithCommas(vaultData.balanceTVM);
   const usdFormatted = formatWithCommas(vaultData.balanceUSD);
 
+  // Update the UI elements with the formatted balances
   document.getElementById('tvmBalance').textContent = `💰 Balance: ${tvmFormatted} TVM`;
   document.getElementById('usdBalance').textContent = `💵 Equivalent to ${usdFormatted} USD`;
 
+  // Update Bio‑Line and UTC Time in the UI
   let bioLineElement = document.getElementById('bioLineText');
   let utcTimeElement = document.getElementById('utcTime');
 
@@ -606,6 +617,7 @@ function populateWalletUI() {
     console.warn("⚠️ Bio-Line and UTC elements are missing in the DOM!");
   }
 }
+
 
 function exportTransactionTable() {
   const table = document.getElementById('transactionTable');
