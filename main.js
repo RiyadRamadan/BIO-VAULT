@@ -3,6 +3,7 @@
  * 
  * - Removes the duplicate snippet in persistVaultData()
  * - Keeps usage of saltBase64 consistent
+ * - Corrects dynamicBaseTVM calculation to prevent double-counting initial balance
  * - All other logic remains unchanged
  ***********************************************************************/
 
@@ -17,7 +18,7 @@ const LOCKOUT_DURATION_SECONDS = 3600; // 1 hour
 const MAX_AUTH_ATTEMPTS = 3;
 
 // For the advanced balance increments
-const BIO_LINE_INTERVAL = 15783000;     // 15,783,000
+const BIO_LINE_INTERVAL = 15783000;     // 15,783,000 seconds (~182 days)
 const BIO_LINE_INCREMENT_AMOUNT = 15000; // 15,000 TVM per interval
 
 const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
@@ -450,6 +451,7 @@ function lockVault() {
  * FIXED function: 
  * - Removed the duplicated snippet
  * - Ensured consistent saltBase64 usage
+ * - Corrected dynamicBaseTVM calculation to prevent double-counting initial balance
  */
 async function persistVaultData(salt = null) {
   try {
@@ -580,7 +582,9 @@ function populateWalletUI() {
   // Calculate dynamic increments based on BIO-Line intervals
   const bioLineProgress = vaultData.bioConstant - vaultData.initialBioConstant;
   const completedIntervals = Math.floor(bioLineProgress / BIO_LINE_INTERVAL);
-  const dynamicBaseTVM = vaultData.initialBalanceTVM + (completedIntervals * BIO_LINE_INCREMENT_AMOUNT);
+  
+  // 🔴 **CORRECTION**: Remove initialBalanceTVM from dynamicBaseTVM to prevent double-counting
+  const dynamicBaseTVM = completedIntervals * BIO_LINE_INCREMENT_AMOUNT;
 
   // Calculate total received TVM
   const receivedTVM = vaultData.transactions
@@ -592,7 +596,7 @@ function populateWalletUI() {
     .filter(tx => tx.type === 'sent')
     .reduce((acc, tx) => acc + tx.amount, 0);
 
-  // Update balanceTVM: Initial + Received - Sent + Dynamic Increments
+  // 🔴 **CORRECTION**: Update balanceTVM correctly without double-counting initialBalanceTVM
   vaultData.balanceTVM = vaultData.initialBalanceTVM + receivedTVM - sentTVM + dynamicBaseTVM;
 
   // Update balanceUSD based on the updated balanceTVM
@@ -617,7 +621,6 @@ function populateWalletUI() {
     console.warn("⚠️ Bio-Line and UTC elements are missing in the DOM!");
   }
 }
-
 
 function exportTransactionTable() {
   const table = document.getElementById('transactionTable');
