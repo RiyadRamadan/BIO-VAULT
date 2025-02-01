@@ -4,6 +4,8 @@
  * - Removes the duplicate snippet in persistVaultData()
  * - Keeps usage of saltBase64 consistent
  * - Corrects dynamicBaseTVM calculation to prevent double-counting initial balance
+ * - Eliminates redundant direct balance updates in transaction handlers
+ * - Throttles vault persistence in the bio‑constant interval
  * - All other logic remains unchanged
  ***********************************************************************/
 
@@ -717,13 +719,18 @@ function initializeBioConstantAndUTCTime() {
   console.log("✅ Bio-Line initialized with current bioConstant and UTC timestamp.");
   populateWalletUI();
 
+  let lastVaultSaveTime = Date.now();
   bioLineInterval = setInterval(() => {
     vaultData.bioConstant += 1;
     vaultData.lastUTCTimestamp += 1;
     console.log(`🔄 Bio-Constant Updated: ${vaultData.bioConstant}`);
 
     populateWalletUI();
-    promptAndSaveVault();
+    // Throttle persistence to once every 10 seconds
+    if (Date.now() - lastVaultSaveTime > 10000) {
+      promptAndSaveVault();
+      lastVaultSaveTime = Date.now();
+    }
   }, 1000);
 }
 
@@ -870,7 +877,11 @@ async function handleSendTransaction() {
     alert('❌ You cannot send to your own Bio‑IBAN.');
     return;
   }
-  if (vaultData.balanceTVM < amount) {
+  if ( (vaultData.initialBalanceTVM +
+       vaultData.transactions.filter(tx => tx.type === 'received').reduce((acc, tx) => acc + tx.amount, 0) -
+       vaultData.transactions.filter(tx => tx.type === 'sent').reduce((acc, tx) => acc + tx.amount, 0)
+       + (Math.floor((vaultData.bioConstant - vaultData.initialBioConstant) / BIO_LINE_INTERVAL) * BIO_LINE_INCREMENT_AMOUNT)
+      ) < amount ) {
     alert('❌ Insufficient TVM balance.');
     return;
   }
@@ -891,23 +902,20 @@ async function handleSendTransaction() {
         const existingPlain = await decryptBioCatchNumber(tx.bioCatch);
         if (existingPlain === plainBioCatchNumber) {
           alert('❌ This BioCatch number already exists. Try again.');
+          transactionLock = false;
           return;
         }
       }
     }
 
-    vaultData.balanceTVM -= amount;
-    vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
-
-    const obfuscatedCatch = await encryptBioCatchNumber(plainBioCatchNumber);
-
+    // NOTE: Removed direct balance update. The balance will be computed from transactions in populateWalletUI.
     vaultData.transactions.push({
       type: 'sent',
       receiverBioIBAN,
       amount,
       timestamp: currentTimestamp,
       status: 'Completed', // irreversible
-      bioCatch: obfuscatedCatch,
+      bioCatch: await encryptBioCatchNumber(plainBioCatchNumber),
       bioConstantAtGeneration: vaultData.bioConstant
     });
 
@@ -915,7 +923,7 @@ async function handleSendTransaction() {
     await promptAndSaveVault();
     alert(`✅ Transaction successful! Amount ${amount} TVM sent to ${receiverBioIBAN}`);
 
-    showBioCatchPopup(obfuscatedCatch);
+    showBioCatchPopup(await encryptBioCatchNumber(plainBioCatchNumber));
 
     document.getElementById('receiverBioIBAN').value = '';
     document.getElementById('catchOutAmount').value = '';
@@ -952,6 +960,7 @@ async function handleReceiveTransaction() {
     const bioCatchNumber = await decryptBioCatchNumber(encryptedBioCatchInput);
     if (!bioCatchNumber) {
       alert('❌ Unable to decode the provided BioCatch Number. Please ensure it is correct.');
+      transactionLock = false;
       return;
     }
 
@@ -960,6 +969,7 @@ async function handleReceiveTransaction() {
         const existingPlain = await decryptBioCatchNumber(tx.bioCatch);
         if (existingPlain === bioCatchNumber) {
           alert('❌ This BioCatch Number has already been used in a received transaction.');
+          transactionLock = false;
           return;
         }
       }
@@ -968,6 +978,7 @@ async function handleReceiveTransaction() {
     const validation = validateBioCatchNumber(bioCatchNumber, amount);
     if (!validation.valid) {
       alert(`❌ BioCatch Validation Failed: ${validation.message}`);
+      transactionLock = false;
       return;
     }
 
@@ -983,6 +994,7 @@ async function handleReceiveTransaction() {
 
     if (!validateBioIBAN(senderBioIBAN)) {
       alert('❌ Invalid Sender Bio‑IBAN extracted from BioCatch Number.');
+      transactionLock = false;
       return;
     }
 
@@ -990,6 +1002,7 @@ async function handleReceiveTransaction() {
     const timeDifference = Math.abs(currentTimestamp - extractedTimestamp);
     if (timeDifference > TRANSACTION_VALIDITY_SECONDS) {
       alert('❌ The timestamp in BioCatch Number is outside acceptable window.');
+      transactionLock = false;
       return;
     }
 
@@ -998,19 +1011,17 @@ async function handleReceiveTransaction() {
         const existingPlain = await decryptBioCatchNumber(tx.bioCatch);
         if (existingPlain === bioCatchNumber) {
           alert('❌ This BioCatch Number has already been used in a transaction.');
+          transactionLock = false;
           return;
         }
       }
     }
 
-    vaultData.balanceTVM += amount;
-    vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
-
-    const obfuscatedCatch = await encryptBioCatchNumber(bioCatchNumber);
+    // NOTE: Removed direct balance update. The balance will be computed from transactions in populateWalletUI.
     vaultData.transactions.push({
       type: 'received',
       senderBioIBAN,
-      bioCatch: obfuscatedCatch,
+      bioCatch: await encryptBioCatchNumber(bioCatchNumber),
       amount,
       timestamp: currentTimestamp,
       status: 'Valid'
