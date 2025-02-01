@@ -5,7 +5,7 @@
  * - Keeps usage of saltBase64 consistent
  * - Corrects dynamicBaseTVM calculation to prevent double-counting initial balance
  * - Eliminates redundant direct balance updates in transaction handlers
- * - Throttles vault persistence in the bio‑constant interval and avoids saving during unlock
+ * - Throttles vault persistence in the bio‑constant interval and avoids saving when vault is not unlocked
  * - All other logic remains unchanged
  ***********************************************************************/
 
@@ -733,8 +733,8 @@ function initializeBioConstantAndUTCTime() {
     console.log(`🔄 Bio-Constant Updated: ${vaultData.bioConstant}`);
 
     populateWalletUI();
-    // Only save if we are not in the middle of unlocking
-    if (!isUnlocking && Date.now() - lastVaultSaveTime > 10000) {
+    // FIX: Only trigger persistence if the vault is unlocked and not during unlock
+    if (vaultUnlocked && !isUnlocking && Date.now() - lastVaultSaveTime > 10000) {
       promptAndSaveVault();
       lastVaultSaveTime = Date.now();
     }
