@@ -5,7 +5,7 @@
  * - Keeps usage of saltBase64 consistent
  * - Corrects dynamicBaseTVM calculation to prevent double-counting initial balance
  * - Eliminates redundant direct balance updates in transaction handlers
- * - Throttles vault persistence in the bio‑constant interval
+ * - Throttles vault persistence in the bio‑constant interval and avoids saving during unlock
  * - All other logic remains unchanged
  ***********************************************************************/
 
@@ -30,6 +30,8 @@ const vaultSyncChannel = new BroadcastChannel('vault-sync');
 let vaultUnlocked = false;
 let derivedKey = null;  // cryptographic key after unlocking
 let bioLineInterval = null;
+// New flag to help prevent persistence during unlock
+let isUnlocking = false;
 
 let vaultData = {
   bioIBAN: null,
@@ -365,66 +367,71 @@ async function createNewVault(pin) {
 }
 
 async function unlockVault() {
-  if (vaultData.lockoutTimestamp) {
-    const currentTimestamp = Math.floor(Date.now() / 1000);
-    if (currentTimestamp < vaultData.lockoutTimestamp) {
-      const remaining = vaultData.lockoutTimestamp - currentTimestamp;
-      alert(`❌ Vault is locked. Try again in ${Math.ceil(remaining / 60)} minutes.`);
-      return;
-    } else {
-      vaultData.lockoutTimestamp = null;
-      vaultData.authAttempts = 0;
-      await promptAndSaveVault();
-    }
-  }
-
-  const biometricAuth = await performBiometricAuthentication();
-  if (!biometricAuth) {
-    handleFailedAuthAttempt();
-    return;
-  }
-
-  const pin = prompt('🔒 Enter your vault PIN:');
-  if (!pin) {
-    alert('❌ PIN is required.');
-    handleFailedAuthAttempt();
-    return;
-  }
-
-  const stored = await loadVaultDataFromDB();
-  if (!stored) {
-    // no vault => create new if user wants
-    if (!confirm('⚠️ No existing vault found. Create a new vault?')) return;
-    await createNewVault(pin);
-    return;
-  }
-
+  isUnlocking = true; // set flag while processing unlock
   try {
-    if (!stored.salt) {
-      throw new Error('🔴 Salt not found in stored data.');
+    if (vaultData.lockoutTimestamp) {
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      if (currentTimestamp < vaultData.lockoutTimestamp) {
+        const remaining = vaultData.lockoutTimestamp - currentTimestamp;
+        alert(`❌ Vault is locked. Try again in ${Math.ceil(remaining / 60)} minutes.`);
+        return;
+      } else {
+        vaultData.lockoutTimestamp = null;
+        vaultData.authAttempts = 0;
+        await promptAndSaveVault();
+      }
     }
 
-    derivedKey = await deriveKeyFromPIN(pin, stored.salt);
-    const decryptedData = await decryptData(derivedKey, stored.iv, stored.ciphertext);
-    vaultData = decryptedData;
+    const biometricAuth = await performBiometricAuthentication();
+    if (!biometricAuth) {
+      await handleFailedAuthAttempt();
+      return;
+    }
 
-    vaultData.lockoutTimestamp = stored.lockoutTimestamp;
-    vaultData.authAttempts = stored.authAttempts;
+    const pin = prompt('🔒 Enter your vault PIN:');
+    if (!pin) {
+      alert('❌ PIN is required.');
+      await handleFailedAuthAttempt();
+      return;
+    }
 
-    console.log('🔓 Vault Decrypted:', vaultData);
-    vaultUnlocked = true;
+    const stored = await loadVaultDataFromDB();
+    if (!stored) {
+      // no vault => create new if user wants
+      if (!confirm('⚠️ No existing vault found. Create a new vault?')) return;
+      await createNewVault(pin);
+      return;
+    }
 
-    vaultData.authAttempts = 0;
-    vaultData.lockoutTimestamp = null;
-    await promptAndSaveVault();
+    try {
+      if (!stored.salt) {
+        throw new Error('🔴 Salt not found in stored data.');
+      }
 
-    showVaultUI();
-    initializeBioConstantAndUTCTime();
-    localStorage.setItem('vaultUnlocked', 'true');
-  } catch (err) {
-    alert(`❌ Failed to decrypt: ${err.message}`);
-    console.error(err);
-    handleFailedAuthAttempt();
+      derivedKey = await deriveKeyFromPIN(pin, stored.salt);
+      const decryptedData = await decryptData(derivedKey, stored.iv, stored.ciphertext);
+      vaultData = decryptedData;
+
+      vaultData.lockoutTimestamp = stored.lockoutTimestamp;
+      vaultData.authAttempts = stored.authAttempts;
+
+      console.log('🔓 Vault Decrypted:', vaultData);
+      vaultUnlocked = true;
+
+      vaultData.authAttempts = 0;
+      vaultData.lockoutTimestamp = null;
+      await promptAndSaveVault();
+
+      showVaultUI();
+      initializeBioConstantAndUTCTime();
+      localStorage.setItem('vaultUnlocked', 'true');
+    } catch (err) {
+      alert(`❌ Failed to decrypt: ${err.message}`);
+      console.error(err);
+      await handleFailedAuthAttempt();
+    }
+  } finally {
+    isUnlocking = false; // clear flag when done
   }
 }
 
@@ -726,8 +733,8 @@ function initializeBioConstantAndUTCTime() {
     console.log(`🔄 Bio-Constant Updated: ${vaultData.bioConstant}`);
 
     populateWalletUI();
-    // Throttle persistence to once every 10 seconds
-    if (Date.now() - lastVaultSaveTime > 10000) {
+    // Only save if we are not in the middle of unlocking
+    if (!isUnlocking && Date.now() - lastVaultSaveTime > 10000) {
       promptAndSaveVault();
       lastVaultSaveTime = Date.now();
     }
