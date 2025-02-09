@@ -1,9 +1,9 @@
 /***********************************************************************
- * main.js — Enhanced Version (with chain cross-check + full vault snapshot
+ * main.js — Enhanced Version (with chain cross‑check + full vault snapshot
  *            embedded in Bio‑Catch) + Device Key Enforcement, PIN Confirmation,
  *            and Transaction Authentication.
  *
- * This version uses a custom, non-JSON serialization to embed the sender’s
+ * This version uses a custom, non‑JSON serialization to embed the sender’s
  * entire vault data into the Bio‑Catch itself.
  *
  * ADDITIONS/CHANGES:
@@ -15,7 +15,7 @@
  * - The "Add to Home Screen" code has been removed. Instead, if the device supports auto‑prompting
  *   (via the beforeinstallprompt event), that prompt is fired automatically.
  *
- * NOTE: The 404 errors for icon.png and the manifest warnings are due to missing assets.
+ * NOTE: The 404 errors for icon.png and manifest warnings are due to missing assets.
  ***********************************************************************/
 
 /* ========= Global Constants & Variables ========= */
@@ -91,17 +91,10 @@ window.addEventListener('beforeinstallprompt', (e) => {
 /* ========= DEVICE KEY FUNCTIONS ========= */
 async function getOrCreateDeviceKey() {
   let storedKey = localStorage.getItem('deviceKey');
-  if (storedKey) {
-    return JSON.parse(storedKey);
-  }
+  if (storedKey) return JSON.parse(storedKey);
   try {
     let keyPair = await crypto.subtle.generateKey(
-      {
-        name: "RSA-OAEP",
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: "SHA-256"
-      },
+      { name: "RSA-OAEP", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
       true,
       ["encrypt", "decrypt"]
     );
@@ -158,9 +151,7 @@ async function verifyFullChainAndBioConstant(senderVaultSnapshot) {
     let prevTimestamp = joinTimestamp;
     for (let tx of sortedTx) {
       const delta = tx.timestamp - prevTimestamp;
-      if (delta < 0) {
-        return { success: false, reason: 'Transaction timestamps are out of order' };
-      }
+      if (delta < 0) return { success: false, reason: 'Transaction timestamps are out of order' };
       simulatedBioConstant += delta;
       if (tx.bioConstantAtGeneration !== undefined &&
           tx.bioConstantAtGeneration !== simulatedBioConstant) {
@@ -437,6 +428,15 @@ async function createNewVault(pin) {
 }
 
 async function unlockVault() {
+  const stored = await loadVaultDataFromDB();
+  if (!stored) {
+    // No vault data exists—clear the device key and backup, then create a new vault.
+    localStorage.removeItem('deviceKey');
+    localStorage.removeItem(VAULT_BACKUP_KEY);
+    console.log('No vault data found; device key and backup cleared.');
+    await createNewVault(prompt('No vault found. Enter a new passphrase:'));
+    return;
+  }
   if (vaultData.lockoutTimestamp) {
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (currentTimestamp < vaultData.lockoutTimestamp) {
@@ -460,16 +460,8 @@ async function unlockVault() {
     await handleFailedAuthAttempt();
     return;
   }
-  const stored = await loadVaultDataFromDB();
-  if (!stored) {
-    if (!confirm('⚠️ No existing vault found. Create a new vault?')) return;
-    await createNewVault(pin);
-    return;
-  }
   try {
-    if (!stored.salt) {
-      throw new Error('🔴 Salt not found in stored data.');
-    }
+    if (!stored.salt) throw new Error('🔴 Salt not found in stored data.');
     derivedKey = await deriveKeyFromPIN(pin, stored.salt);
     if (!derivedKey) throw new Error("Failed to derive encryption key.");
     const decryptedData = await decryptData(derivedKey, stored.iv, stored.ciphertext);
@@ -581,99 +573,57 @@ function showVaultUI() {
 }
 
 /* ========= STARTUP & MULTI‑TAB ========= */
-window.addEventListener('DOMContentLoaded', () => {
-  let lastURL = localStorage.getItem("last_session_url");
-  if (lastURL && window.location.href !== lastURL) {
-    window.location.href = lastURL;
+function initializeUI() {
+  const enterVaultBtn = document.getElementById('enterVaultBtn');
+  if (enterVaultBtn) {
+    enterVaultBtn.addEventListener('click', unlockVault);
+    console.log("✅ Event listener attached to enterVaultBtn!");
+  } else {
+    console.error("❌ enterVaultBtn NOT FOUND in DOM!");
   }
-  window.addEventListener("beforeunload", () => {
-    localStorage.setItem("last_session_url", window.location.href);
-  });
-  console.log("✅ Initializing UI...");
-  initializeUI();
-  loadVaultOnStartup();
-  preventMultipleVaults();
-  enforceStoragePersistence();
-  vaultSyncChannel.onmessage = async (e) => {
-    if (e.data?.type === 'vaultUpdate') {
-      try {
-        const { iv, data } = e.data.payload;
-        if (!derivedKey) {
-          console.warn('🔒 Received vaultUpdate but derivedKey is not available yet.');
-          return;
-        }
-        const decrypted = await decryptData(derivedKey, base64ToBuffer(iv), base64ToBuffer(data));
-        Object.assign(vaultData, decrypted);
-        populateWalletUI();
-        console.log('🔄 Synced vault across tabs');
-      } catch (err) {
-        console.error('Tab sync failed:', err);
-      }
-    }
-  };
-});
-
-async function enforceStoragePersistence() {
-  if (!navigator.storage?.persist) return;
-  const persisted = await navigator.storage.persisted();
-  if (!persisted) {
-    const granted = await navigator.storage.persist();
-    console.log(granted ? '🔒 Storage hardened' : '⚠️ Storage vulnerable');
+  const lockVaultBtn = document.getElementById('lockVaultBtn');
+  const catchInBtn = document.getElementById('catchInBtn');
+  const catchOutBtn = document.getElementById('catchOutBtn');
+  const copyBioIBANBtn = document.getElementById('copyBioIBANBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  if (lockVaultBtn) lockVaultBtn.addEventListener('click', lockVault);
+  if (catchInBtn) catchInBtn.addEventListener('click', handleReceiveTransaction);
+  if (catchOutBtn) catchOutBtn.addEventListener('click', handleSendTransaction);
+  if (copyBioIBANBtn) copyBioIBANBtn.addEventListener('click', handleCopyBioIBAN);
+  if (exportBtn) exportBtn.addEventListener('click', exportTransactionTable);
+  const bioCatchPopup = document.getElementById('bioCatchPopup');
+  const closeBioCatchPopupBtn = document.getElementById('closeBioCatchPopup');
+  const copyBioCatchPopupBtn = document.getElementById('copyBioCatchBtn');
+  if (closeBioCatchPopupBtn) {
+    closeBioCatchPopupBtn.addEventListener('click', () => { bioCatchPopup.style.display = 'none'; });
   }
-  setInterval(async () => {
-    const estimate = await navigator.storage.estimate();
-    if ((estimate.usage / estimate.quota) > 0.85) {
-      console.warn('🚨 Storage critical:', estimate);
-      alert('❗ Vault storage nearing limit! Export backup!');
-    }
-  }, STORAGE_CHECK_INTERVAL);
-}
-
-async function loadVaultOnStartup() {
-  try {
-    let stored = await loadVaultDataFromDB();
-    if (!stored) {
-      const backup = localStorage.getItem(VAULT_BACKUP_KEY);
-      if (backup) {
-        const parsed = JSON.parse(backup);
-        parsed.iv = base64ToBuffer(parsed.iv);
-        parsed.ciphertext = base64ToBuffer(parsed.data);
-        console.log('♻️ Restored from localStorage backup');
-        stored = parsed;
-      }
-    }
-    if (stored) {
-      document.getElementById('enterVaultBtn').style.display = 'block';
-      document.getElementById('lockedScreen').classList.remove('hidden');
-    } else {
-      document.getElementById('enterVaultBtn').style.display = 'block';
-      document.getElementById('lockedScreen').classList.remove('hidden');
-    }
-  } catch (err) {
-    console.error('🔥 Backup restoration failed:', err);
-    localStorage.removeItem(VAULT_BACKUP_KEY);
+  if (copyBioCatchPopupBtn) {
+    copyBioCatchPopupBtn.addEventListener('click', () => {
+      const bcNum = document.getElementById('bioCatchNumberText').textContent;
+      navigator.clipboard.writeText(bcNum)
+        .then(() => alert('✅ Bio‑Catch Number copied to clipboard!'))
+        .catch(err => {
+          console.error('❌ Clipboard copy failed:', err);
+          alert('⚠️ Failed to copy Bio‑Catch Number. Try again!');
+        });
+    });
   }
-}
-
-function preventMultipleVaults() {
-  window.addEventListener('storage', (event) => {
-    if (event.key === 'vaultUnlocked') {
-      if (event.newValue === 'true' && !vaultUnlocked) {
-        vaultUnlocked = true;
-        showVaultUI();
-        initializeBioConstantAndUTCTime();
-      } else if (event.newValue === 'false' && vaultUnlocked) {
-        vaultUnlocked = false;
-        lockVault();
-      }
-    }
-    if (event.key === 'vaultLock') {
-      if (event.newValue === 'locked' && !vaultUnlocked) {
-        console.log('🔒 Another tab indicated vault lock is in place.');
-      }
+  window.addEventListener('click', (event) => {
+    if (event.target === bioCatchPopup) {
+      bioCatchPopup.style.display = 'none';
     }
   });
   enforceSingleVault();
+  // "Add to Home Screen" code has been removed.
+}
+
+function enforceSingleVault() {
+  const vaultLock = localStorage.getItem('vaultLock');
+  if (!vaultLock) {
+    localStorage.setItem('vaultLock', 'locked');
+  } else {
+    console.log('🔒 Vault lock detected. Ensuring single vault instance.');
+  }
 }
 
 /* ========= WALLET / BALANCE / BIO‑LINE ========= */
@@ -683,8 +633,10 @@ function populateWalletUI() {
     bioIBANInput.value = vaultData.bioIBAN || 'BIO...';
   }
   updatePeriodicIncrements();
-  const receivedTVM = vaultData.transactions.filter(tx => tx.type === 'received').reduce((acc, tx) => acc + tx.amount, 0);
-  const sentTVM = vaultData.transactions.filter(tx => tx.type === 'sent').reduce((acc, tx) => acc + tx.amount, 0);
+  const receivedTVM = vaultData.transactions.filter(tx => tx.type === 'received')
+                        .reduce((acc, tx) => acc + tx.amount, 0);
+  const sentTVM = vaultData.transactions.filter(tx => tx.type === 'sent')
+                        .reduce((acc, tx) => acc + tx.amount, 0);
   vaultData.balanceTVM = vaultData.initialBalanceTVM + receivedTVM - sentTVM;
   vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
   const tvmFormatted = formatWithCommas(vaultData.balanceTVM);
@@ -720,7 +672,7 @@ function initializeBioConstantAndUTCTime() {
   const elapsedSeconds = currentTimestamp - vaultData.lastUTCTimestamp;
   vaultData.bioConstant += elapsedSeconds;
   vaultData.lastUTCTimestamp = currentTimestamp;
-  console.log("✅ Bio-Line initialized with current bioConstant and UTC timestamp.");
+  console.log("✅ Bio‑Line initialized with current bioConstant and UTC timestamp.");
   populateWalletUI();
   bioLineInterval = setInterval(async () => {
     vaultData.bioConstant += 1;
@@ -734,7 +686,7 @@ function initializeBioConstantAndUTCTime() {
 function handleCopyBioIBAN() {
   const bioIBANInput = document.getElementById('bioibanInput');
   if (!bioIBANInput || !bioIBANInput.value.trim()) {
-    alert('❌ Error: No Bio-IBAN found to copy!');
+    alert('❌ Error: No Bio‑IBAN found to copy!');
     return;
   }
   navigator.clipboard.writeText(bioIBANInput.value.trim())
@@ -805,9 +757,7 @@ function deserializeVaultSnapshotFromBioCatch(base64String) {
   const txSep = '^';
   const txFieldSep = '~';
   const parts = raw.split(fieldSep);
-  if (parts.length < 6) {
-    throw new Error('Vault snapshot missing fields.');
-  }
+  if (parts.length < 6) throw new Error('Vault snapshot missing fields.');
   const joinTimestamp = parseInt(parts[0], 10);
   const initialBioConstant = parseInt(parts[1], 10);
   const incrementsUsed = parseInt(parts[2], 10);
@@ -913,7 +863,7 @@ async function handleSendTransaction() {
     return;
   }
   if (!validateBioIBAN(receiverBioIBAN)) {
-    alert('❌ Invalid Receiver Bio-IBAN format.');
+    alert('❌ Invalid Receiver Bio‑IBAN format.');
     return;
   }
   if (receiverBioIBAN === vaultData.bioIBAN) {
@@ -1050,51 +1000,7 @@ async function handleReceiveTransaction() {
   }
 }
 
-/* ========= TRANSACTION TABLE / POPUPS ========= */
-function renderTransactionTable() {
-  const tbody = document.getElementById('transactionBody');
-  tbody.innerHTML = '';
-  vaultData.transactions
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .forEach(tx => {
-      const row = document.createElement('tr');
-      let bioIBANCell = '—';
-      let bioCatchCell = '—';
-      let amountCell = tx.amount;
-      let timestampCell = formatDisplayDate(tx.timestamp);
-      let statusCell = tx.status;
-      if (tx.type === 'sent') {
-        bioIBANCell = tx.receiverBioIBAN;
-      } else if (tx.type === 'received') {
-        bioIBANCell = tx.senderBioIBAN || 'Unknown';
-      }
-      if (tx.bioCatch) {
-        bioCatchCell = tx.bioCatch;
-      }
-      let bioIBANCellStyle = tx.type === 'sent'
-        ? 'style="background-color: #FFCCCC;"'
-        : tx.type === 'received'
-        ? 'style="background-color: #CCFFCC;"'
-        : '';
-      row.innerHTML = `
-        <td ${bioIBANCellStyle}>${bioIBANCell}</td>
-        <td>${bioCatchCell}</td>
-        <td>${amountCell}</td>
-        <td>${timestampCell}</td>
-        <td>${statusCell}</td>
-      `;
-      tbody.appendChild(row);
-    });
-}
-
-function showBioCatchPopup(encryptedBioCatch) {
-  const bioCatchPopup = document.getElementById('bioCatchPopup');
-  const bioCatchNumberText = document.getElementById('bioCatchNumberText');
-  bioCatchNumberText.textContent = encryptedBioCatch;
-  bioCatchPopup.style.display = 'flex';
-}
-
-/* ========= UI INITIALIZATION ========= */
+/* ========= UI / MULTI‑TAB ========= */
 function initializeUI() {
   const enterVaultBtn = document.getElementById('enterVaultBtn');
   if (enterVaultBtn) {
@@ -1155,8 +1061,10 @@ function populateWalletUI() {
     bioIBANInput.value = vaultData.bioIBAN || 'BIO...';
   }
   updatePeriodicIncrements();
-  const receivedTVM = vaultData.transactions.filter(tx => tx.type === 'received').reduce((acc, tx) => acc + tx.amount, 0);
-  const sentTVM = vaultData.transactions.filter(tx => tx.type === 'sent').reduce((acc, tx) => acc + tx.amount, 0);
+  const receivedTVM = vaultData.transactions.filter(tx => tx.type === 'received')
+                        .reduce((acc, tx) => acc + tx.amount, 0);
+  const sentTVM = vaultData.transactions.filter(tx => tx.type === 'sent')
+                        .reduce((acc, tx) => acc + tx.amount, 0);
   vaultData.balanceTVM = vaultData.initialBalanceTVM + receivedTVM - sentTVM;
   vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
   const tvmFormatted = formatWithCommas(vaultData.balanceTVM);
@@ -1192,7 +1100,7 @@ function initializeBioConstantAndUTCTime() {
   const elapsedSeconds = currentTimestamp - vaultData.lastUTCTimestamp;
   vaultData.bioConstant += elapsedSeconds;
   vaultData.lastUTCTimestamp = currentTimestamp;
-  console.log("✅ Bio-Line initialized with current bioConstant and UTC timestamp.");
+  console.log("✅ Bio‑Line initialized with current bioConstant and UTC timestamp.");
   populateWalletUI();
   bioLineInterval = setInterval(async () => {
     vaultData.bioConstant += 1;
@@ -1206,7 +1114,7 @@ function initializeBioConstantAndUTCTime() {
 function handleCopyBioIBAN() {
   const bioIBANInput = document.getElementById('bioibanInput');
   if (!bioIBANInput || !bioIBANInput.value.trim()) {
-    alert('❌ Error: No Bio-IBAN found to copy!');
+    alert('❌ Error: No Bio‑IBAN found to copy!');
     return;
   }
   navigator.clipboard.writeText(bioIBANInput.value.trim())
@@ -1277,9 +1185,7 @@ function deserializeVaultSnapshotFromBioCatch(base64String) {
   const txSep = '^';
   const txFieldSep = '~';
   const parts = raw.split(fieldSep);
-  if (parts.length < 6) {
-    throw new Error('Vault snapshot missing fields.');
-  }
+  if (parts.length < 6) throw new Error('Vault snapshot missing fields.');
   const joinTimestamp = parseInt(parts[0], 10);
   const initialBioConstant = parseInt(parts[1], 10);
   const incrementsUsed = parseInt(parts[2], 10);
@@ -1385,7 +1291,7 @@ async function handleSendTransaction() {
     return;
   }
   if (!validateBioIBAN(receiverBioIBAN)) {
-    alert('❌ Invalid Receiver Bio-IBAN format.');
+    alert('❌ Invalid Receiver Bio‑IBAN format.');
     return;
   }
   if (receiverBioIBAN === vaultData.bioIBAN) {
@@ -1575,22 +1481,265 @@ async function loadVaultOnStartup() {
   try {
     let stored = await loadVaultDataFromDB();
     if (!stored) {
-      const backup = localStorage.getItem(VAULT_BACKUP_KEY);
-      if (backup) {
-        const parsed = JSON.parse(backup);
-        parsed.iv = base64ToBuffer(parsed.iv);
-        parsed.ciphertext = base64ToBuffer(parsed.data);
-        console.log('♻️ Restored from localStorage backup');
-        stored = parsed;
+      // Clear device key and backup if no vault data exists.
+      localStorage.removeItem('deviceKey');
+      localStorage.removeItem(VAULT_BACKUP_KEY);
+      console.log('No vault data found; device key and backup cleared.');
+      document.getElementById('enterVaultBtn').style.display = 'block';
+      document.getElementById('lockedScreen').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('enterVaultBtn').style.display = 'block';
+    document.getElementById('lockedScreen').classList.remove('hidden');
+  } catch (err) {
+    console.error('🔥 Backup restoration failed:', err);
+    localStorage.removeItem(VAULT_BACKUP_KEY);
+  }
+}
+
+function preventMultipleVaults() {
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'vaultUnlocked') {
+      if (event.newValue === 'true' && !vaultUnlocked) {
+        vaultUnlocked = true;
+        showVaultUI();
+        initializeBioConstantAndUTCTime();
+      } else if (event.newValue === 'false' && vaultUnlocked) {
+        vaultUnlocked = false;
+        lockVault();
       }
     }
-    if (stored) {
-      document.getElementById('enterVaultBtn').style.display = 'block';
-      document.getElementById('lockedScreen').classList.remove('hidden');
-    } else {
-      document.getElementById('enterVaultBtn').style.display = 'block';
-      document.getElementById('lockedScreen').classList.remove('hidden');
+    if (event.key === 'vaultLock') {
+      if (event.newValue === 'locked' && !vaultUnlocked) {
+        console.log('🔒 Another tab indicated vault lock is in place.');
+      }
     }
+  });
+  enforceSingleVault();
+}
+
+/* ========= FINAL UI FUNCTIONS ========= */
+function handleCopyBioIBAN() {
+  const bioIBANInput = document.getElementById('bioibanInput');
+  if (!bioIBANInput || !bioIBANInput.value.trim()) {
+    alert('❌ Error: No Bio‑IBAN found to copy!');
+    return;
+  }
+  navigator.clipboard.writeText(bioIBANInput.value.trim())
+    .then(() => alert('✅ Bio‑IBAN copied to clipboard!'))
+    .catch(err => {
+      console.error('❌ Clipboard copy failed:', err);
+      alert('⚠️ Failed to copy Bio‑IBAN. Try again!');
+    });
+}
+
+function exportTransactionTable() {
+  const table = document.getElementById('transactionTable');
+  const rows = table.querySelectorAll('tr');
+  let csvContent = "data:text/csv;charset=utf-8,";
+  rows.forEach(row => {
+    const cols = row.querySelectorAll('th, td');
+    const rowData = [];
+    cols.forEach(col => {
+      let data = col.innerText.replace(/"/g, '""');
+      if (data.includes(',')) data = `"${data}"`;
+      rowData.push(data);
+    });
+    csvContent += rowData.join(",") + "\r\n";
+  });
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", "transaction_history.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+/* ========= SNAPSHOT SERIALIZATION ========= */
+function serializeVaultSnapshotForBioCatch(vData) {
+  const fieldSep = '|';
+  const txSep = '^';
+  const txFieldSep = '~';
+  const txParts = (vData.transactions || []).map(tx => {
+    return [
+      tx.type || '',
+      tx.receiverBioIBAN || '',
+      tx.senderBioIBAN || '',
+      tx.amount || 0,
+      tx.timestamp || 0,
+      tx.status || '',
+      tx.bioCatch || '',
+      tx.bioConstantAtGeneration || 0,
+      tx.previousHash || '',
+      tx.txHash || ''
+    ].join(txFieldSep);
+  });
+  const txString = txParts.join(txSep);
+  const rawString = [
+    vData.joinTimestamp || 0,
+    vData.initialBioConstant || 0,
+    vData.incrementsUsed || 0,
+    vData.finalChainHash || '',
+    vData.initialBalanceTVM || 0,
+    txString
+  ].join(fieldSep);
+  return btoa(rawString);
+}
+
+function deserializeVaultSnapshotFromBioCatch(base64String) {
+  const raw = atob(base64String);
+  const fieldSep = '|';
+  const txSep = '^';
+  const txFieldSep = '~';
+  const parts = raw.split(fieldSep);
+  if (parts.length < 6) throw new Error('Vault snapshot missing fields.');
+  const joinTimestamp = parseInt(parts[0], 10);
+  const initialBioConstant = parseInt(parts[1], 10);
+  const incrementsUsed = parseInt(parts[2], 10);
+  const finalChainHash = parts[3];
+  const initialBalanceTVM = parseInt(parts[4], 10);
+  const txString = parts[5] || '';
+  const txChunks = txString.split(txSep).filter(Boolean);
+  const transactions = txChunks.map(chunk => {
+    const txFields = chunk.split(txFieldSep);
+    return {
+      type: txFields[0] || '',
+      receiverBioIBAN: txFields[1] || '',
+      senderBioIBAN: txFields[2] || '',
+      amount: parseFloat(txFields[3]) || 0,
+      timestamp: parseInt(txFields[4], 10) || 0,
+      status: txFields[5] || '',
+      bioCatch: txFields[6] || '',
+      bioConstantAtGeneration: parseInt(txFields[7], 10) || 0,
+      previousHash: txFields[8] || '',
+      txHash: txFields[9] || ''
+    };
+  });
+  return { joinTimestamp, initialBioConstant, incrementsUsed, finalChainHash, initialBalanceTVM, transactions };
+}
+
+/* ========= BIO‑CATCH GENERATION & VALIDATION ========= */
+function generateBioCatchNumber(senderBioIBAN, receiverBioIBAN, amount, timestamp, senderBalance, finalChainHash) {
+  const senderVaultSnapshotEncoded = serializeVaultSnapshotForBioCatch(vaultData);
+  const senderNumeric = parseInt(senderBioIBAN.slice(3));
+  const receiverNumeric = parseInt(receiverBioIBAN.slice(3));
+  const firstPart = senderNumeric + receiverNumeric;
+  const secondPart = amount + timestamp;
+  return `Bio-${firstPart}-${secondPart}-${senderBalance}-${senderBioIBAN}-${finalChainHash}-${senderVaultSnapshotEncoded}`;
+}
+
+function validateBioCatchNumber(bioCatchNumber, claimedAmount) {
+  const parts = bioCatchNumber.split('-');
+  if (parts.length !== 7 || parts[0] !== 'Bio') {
+    return { valid: false, message: 'BioCatch must have 7 parts with prefix "Bio-".' };
+  }
+  const [ , firstPartStr, secondPartStr, claimedSenderBalanceStr, claimedSenderIBAN, chainHash, snapshotEncoded ] = parts;
+  const firstPart = parseInt(firstPartStr);
+  const secondPart = parseInt(secondPartStr);
+  const claimedSenderBalance = parseInt(claimedSenderBalanceStr);
+  if (isNaN(firstPart) || isNaN(secondPart) || isNaN(claimedSenderBalance)) {
+    return { valid: false, message: 'Numeric parts must be valid numbers.' };
+  }
+  const receiverNumeric = parseInt(vaultData.bioIBAN.slice(3));
+  const senderNumeric = firstPart - receiverNumeric;
+  if (senderNumeric < 0) {
+    return { valid: false, message: 'Negative or invalid sender numeric from Bio-Catch code.' };
+  }
+  const expectedFirstPart = senderNumeric + receiverNumeric;
+  if (firstPart !== expectedFirstPart) {
+    return { valid: false, message: 'Mismatch in sum of sender/receiver IBAN numerics.' };
+  }
+  const extractedTimestamp = secondPart - claimedAmount;
+  const currentTimestamp = vaultData.lastUTCTimestamp;
+  const timeDiff = Math.abs(currentTimestamp - extractedTimestamp);
+  if (timeDiff > TRANSACTION_VALIDITY_SECONDS) {
+    return { valid: false, message: 'Timestamp is outside ±12min window.' };
+  }
+  const expectedSenderIBAN = `BIO${senderNumeric}`;
+  if (claimedSenderIBAN !== expectedSenderIBAN) {
+    return { valid: false, message: 'Mismatched Sender IBAN in the Bio-Catch code.' };
+  }
+  if (claimedSenderBalance < claimedAmount) {
+    return { valid: false, message: 'Sender’s claimed balance is less than transaction amount.' };
+  }
+  let senderVaultSnapshot = null;
+  try {
+    senderVaultSnapshot = deserializeVaultSnapshotFromBioCatch(snapshotEncoded);
+  } catch (err) {
+    return { valid: false, message: `Snapshot parse error: ${err.message}` };
+  }
+  return { valid: true, message: 'OK', chainHash, claimedSenderIBAN, senderVaultSnapshot };
+}
+
+function validateBioIBAN(bioIBAN) {
+  if (!bioIBAN.startsWith('BIO')) return false;
+  const numericPart = parseInt(bioIBAN.slice(3));
+  return !isNaN(numericPart) && numericPart > 0;
+}
+
+/* ========= UI / MULTI‑TAB ========= */
+window.addEventListener('DOMContentLoaded', () => {
+  let lastURL = localStorage.getItem("last_session_url");
+  if (lastURL && window.location.href !== lastURL) {
+    window.location.href = lastURL;
+  }
+  window.addEventListener("beforeunload", () => {
+    localStorage.setItem("last_session_url", window.location.href);
+  });
+  console.log("✅ Initializing UI...");
+  initializeUI();
+  loadVaultOnStartup();
+  preventMultipleVaults();
+  enforceStoragePersistence();
+  vaultSyncChannel.onmessage = async (e) => {
+    if (e.data?.type === 'vaultUpdate') {
+      try {
+        const { iv, data } = e.data.payload;
+        if (!derivedKey) {
+          console.warn('🔒 Received vaultUpdate but derivedKey is not available yet.');
+          return;
+        }
+        const decrypted = await decryptData(derivedKey, base64ToBuffer(iv), base64ToBuffer(data));
+        Object.assign(vaultData, decrypted);
+        populateWalletUI();
+        console.log('🔄 Synced vault across tabs');
+      } catch (err) {
+        console.error('Tab sync failed:', err);
+      }
+    }
+  };
+});
+
+async function enforceStoragePersistence() {
+  if (!navigator.storage?.persist) return;
+  const persisted = await navigator.storage.persisted();
+  if (!persisted) {
+    const granted = await navigator.storage.persist();
+    console.log(granted ? '🔒 Storage hardened' : '⚠️ Storage vulnerable');
+  }
+  setInterval(async () => {
+    const estimate = await navigator.storage.estimate();
+    if ((estimate.usage / estimate.quota) > 0.85) {
+      console.warn('🚨 Storage critical:', estimate);
+      alert('❗ Vault storage nearing limit! Export backup!');
+    }
+  }, STORAGE_CHECK_INTERVAL);
+}
+
+async function loadVaultOnStartup() {
+  try {
+    let stored = await loadVaultDataFromDB();
+    if (!stored) {
+      localStorage.removeItem('deviceKey');
+      localStorage.removeItem(VAULT_BACKUP_KEY);
+      console.log('No vault data found; device key and backup cleared.');
+      document.getElementById('enterVaultBtn').style.display = 'block';
+      document.getElementById('lockedScreen').classList.remove('hidden');
+      return;
+    }
+    document.getElementById('enterVaultBtn').style.display = 'block';
+    document.getElementById('lockedScreen').classList.remove('hidden');
   } catch (err) {
     console.error('🔥 Backup restoration failed:', err);
     localStorage.removeItem(VAULT_BACKUP_KEY);
