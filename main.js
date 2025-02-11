@@ -1,27 +1,10 @@
 /***********************************************************************
  * main.js — Single-Vault, Device-Key, Biometric, & Chain-Validated
- * 
- * MAIN FIXES / IMPROVEMENTS:
- * 1. Lockout logic checks DB data FIRST, then sets vaultData, then
- *    checks lockoutTimestamp (avoid stale in-memory data).
- * 2. Single-vault approach: 
- *    - We keep both enforceSingleVault() & preventMultipleVaults() but 
- *      set vaultLock = 'unlocked' or 'locked' properly so there's
- *      no half-implemented confusion.
- * 3. The auto-save from bioLineInterval is now 30s instead of 1s 
- *    to reduce overhead. You can easily adjust that.
- * 4. If DB is empty, we try localStorage backup before forcibly
- *    creating a new vault.
- * 5. Lockout changes are broadcast across tabs if needed so 
- *    all tabs see the lockout state.
- * 6. If partial decode fails, user can attempt a local backup restore.
- * 7. transactionLock is local, but you can expand for cross-tab.
- * 8. Using prompt() for PIN is kept for example, but consider a 
- *    real HTML <input type="password"> in production.
- * 9. We add a minimal check to avoid potential infinite re-redirect 
- *    from last_session_url.
- * 10. Comments on deviceKey mismatch, chain hashing, large 
- *     transaction arrays, etc.
+ * with:
+ * 1) Real password UI modals (instead of prompt()).
+ * 2) Biometric fallback if creation fails.
+ * 3) Cross-tab concurrency for transactions with localStorage "txLock".
+ * 4) Slightly friendlier local backup restore flow with a modal.
  ***********************************************************************/
 
 /* ========= Global Constants & Variables ========= */
@@ -47,6 +30,8 @@ const vaultSyncChannel = new BroadcastChannel('vault-sync');
 // ephemeral flags
 let vaultUnlocked = false;
 let derivedKey = null;
+
+// Instead of 1-second increments, we use 30 seconds (you can tweak)
 let bioLineInterval = null;
 
 // main data structure
@@ -69,7 +54,9 @@ let vaultData = {
   deviceKey: null
 };
 
-/* ========= Utility Functions ========= */
+/* ---------------------------------------------------------------------
+ *   UTILITY FUNCTIONS & BASIC VALIDATION
+ * ------------------------------------------------------------------- */
 
 function formatWithCommas(num) {
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -104,9 +91,7 @@ function base64ToBuffer(base64) {
   return buffer;
 }
 
-/**
- * Minimal check for "BIO1234"
- */
+/** Minimal check for "BIO<numeric>" */
 function validateBioIBAN(bioIBAN) {
   if (typeof bioIBAN !== 'string') return false;
   if (!bioIBAN.startsWith('BIO')) return false;
@@ -114,64 +99,10 @@ function validateBioIBAN(bioIBAN) {
   return Number.isFinite(numericPart) && numericPart > 0;
 }
 
-/* ========= Device Key ========= */
-async function getOrCreateDeviceKey() {
-  let storedKey = localStorage.getItem('deviceKey');
-  if (storedKey) {
-    return JSON.parse(storedKey);
-  }
-  try {
-    let keyPair = await crypto.subtle.generateKey(
-      {
-        name: "RSA-OAEP",
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: "SHA-256"
-      },
-      true,
-      ["encrypt", "decrypt"]
-    );
-    let exportedKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
-    localStorage.setItem('deviceKey', JSON.stringify(exportedKey));
-    return exportedKey;
-  } catch (err) {
-    console.error("Error generating device key:", err);
-    return null;
-  }
-}
+/* ---------------------------------------------------------------------
+ *   BIOMETRIC (WEBAUTHN)
+ * ------------------------------------------------------------------- */
 
-/* ========= Key Derivation from PIN ========= */
-async function deriveKeyFromPIN(pin, salt) {
-  try {
-    const encoder = new TextEncoder();
-    const pinBuffer = encoder.encode(pin);
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      pinBuffer,
-      { name: 'PBKDF2' },
-      false,
-      ['deriveKey']
-    );
-    const derivedKey = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: salt,
-        iterations: 100000,
-        hash: 'SHA-256'
-      },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-    return derivedKey;
-  } catch (err) {
-    console.error("Error deriving key from PIN:", err);
-    return null;
-  }
-}
-
-/* ========= Biometric (WebAuthn) ========= */
 async function performBiometricAuthenticationForCreation() {
   try {
     const publicKey = {
@@ -220,35 +151,63 @@ async function performBiometricAssertion(credentialId) {
 async function authenticateForTransaction() {
   if (vaultData.credentialId) {
     const ok = await performBiometricAssertion(vaultData.credentialId);
+    if (!ok) alert("❌ Transaction cancelled. Biometric assertion failed.");
     return ok;
-  }
-  alert("❌ No stored credential ID, transaction cancelled.");
-  return false;
+  } 
+  // fallback if no credentialId
+  return true;
 }
 
-/* ========= Encryption / Decryption ========= */
-async function encryptData(key, dataObj) {
+/* ---------------------------------------------------------------------
+ *   CRYPTOGRAPHIC KEY DERIVATION
+ * ------------------------------------------------------------------- */
+
+async function deriveKeyFromPIN(pin, salt) {
   try {
-    const enc = new TextEncoder();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const plaintext = enc.encode(JSON.stringify(dataObj));
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
-    return { iv, ciphertext };
+    const encoder = new TextEncoder();
+    const pinBuffer = encoder.encode(pin);
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      pinBuffer,
+      { name: 'PBKDF2' },
+      false,
+      ['deriveKey']
+    );
+    const derivedKey = await crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: salt,
+        iterations: 100000,
+        hash: 'SHA-256'
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    return derivedKey;
   } catch (err) {
-    console.error("Encryption error:", err);
-    throw err;
+    console.error("Error deriving key from PIN:", err);
+    return null;
   }
+}
+
+/* ---------------------------------------------------------------------
+ *   ENCRYPTION / DECRYPTION
+ * ------------------------------------------------------------------- */
+
+async function encryptData(key, dataObj) {
+  const enc = new TextEncoder();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = enc.encode(JSON.stringify(dataObj));
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  return { iv, ciphertext };
 }
 
 async function decryptData(key, iv, ciphertext) {
-  try {
-    const dec = new TextDecoder();
-    const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-    return JSON.parse(dec.decode(plainBuffer));
-  } catch (err) {
-    console.error("Decryption error:", err);
-    throw err;
-  }
+  const dec = new TextDecoder();
+  const plainBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  return JSON.parse(dec.decode(plainBuffer));
 }
 
 async function encryptBioCatchNumber(plainText) {
@@ -256,7 +215,7 @@ async function encryptBioCatchNumber(plainText) {
     return btoa(plainText);
   } catch (err) {
     console.error("Error obfuscating BioCatchNumber:", err);
-    return plainText;
+    return plainText; // fallback
   }
 }
 
@@ -269,8 +228,11 @@ async function decryptBioCatchNumber(encryptedString) {
   }
 }
 
-/* ========= IndexedDB CRUD ========= */
-function openVaultDB() {
+/* ---------------------------------------------------------------------
+ *   INDEXEDDB CRUD
+ * ------------------------------------------------------------------- */
+
+async function openVaultDB() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = (event) => {
@@ -285,27 +247,22 @@ function openVaultDB() {
 }
 
 async function saveVaultDataToDB(iv, ciphertext, saltBase64) {
-  try {
-    const db = await openVaultDB();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction([VAULT_STORE], 'readwrite');
-      const store = tx.objectStore(VAULT_STORE);
-      const ciphertextUint8 = new Uint8Array(ciphertext);
-      store.put({
-        id: 'vaultData',
-        iv: bufferToBase64(iv),
-        ciphertext: bufferToBase64(ciphertextUint8),
-        salt: saltBase64,
-        lockoutTimestamp: vaultData.lockoutTimestamp || null,
-        authAttempts: vaultData.authAttempts || 0
-      });
-      tx.oncomplete = () => resolve();
-      tx.onerror = (err) => reject(err);
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([VAULT_STORE], 'readwrite');
+    const store = tx.objectStore(VAULT_STORE);
+    const ciphertextUint8 = new Uint8Array(ciphertext);
+    store.put({
+      id: 'vaultData',
+      iv: bufferToBase64(iv),
+      ciphertext: bufferToBase64(ciphertextUint8),
+      salt: saltBase64,
+      lockoutTimestamp: vaultData.lockoutTimestamp || null,
+      authAttempts: vaultData.authAttempts || 0
     });
-  } catch (err) {
-    console.error("Error saving to DB:", err);
-    throw err;
-  }
+    tx.oncomplete = () => resolve();
+    tx.onerror = (err) => reject(err);
+  });
 }
 
 async function loadVaultDataFromDB() {
@@ -330,7 +287,6 @@ async function loadVaultDataFromDB() {
             });
           } catch (error) {
             console.error('Error decoding stored data:', error);
-            // we do "resolve(null)" => fallback to attempt local backup
             resolve(null);
           }
         } else {
@@ -345,7 +301,10 @@ async function loadVaultDataFromDB() {
   }
 }
 
-/* ========= Transaction Hashing & Full-Chain Validation ========= */
+/* ---------------------------------------------------------------------
+ *   TRANSACTION HASHING & CHAIN VALIDATION
+ * ------------------------------------------------------------------- */
+
 async function computeTransactionHash(previousHash, txObject) {
   const dataString = JSON.stringify({ previousHash, ...txObject });
   const buffer = new TextEncoder().encode(dataString);
@@ -355,7 +314,7 @@ async function computeTransactionHash(previousHash, txObject) {
 
 async function computeFullChainHash(transactions) {
   let runningHash = '';
-  // sorts by ascending timestamp
+  // sort by ascending timestamp
   const sortedTx = [...transactions].sort((a, b) => a.timestamp - b.timestamp);
   for (let tx of sortedTx) {
     const txObjForHash = {
@@ -405,43 +364,41 @@ async function verifyFullChainAndBioConstant(senderVaultSnapshot) {
   }
 }
 
-/* ========= Vault Persistence Wrapper ========= */
+/* ---------------------------------------------------------------------
+ *   PERSISTENCE WRAPPER
+ * ------------------------------------------------------------------- */
+
 async function persistVaultData(salt = null) {
-  try {
-    if (!derivedKey) {
-      console.error("No encryption key available for persistVaultData.");
+  if (!derivedKey) {
+    console.error("No encryption key available for persistVaultData.");
+    return;
+  }
+  const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
+
+  let saltBase64;
+  if (salt) {
+    saltBase64 = bufferToBase64(salt);
+  } else {
+    const stored = await loadVaultDataFromDB();
+    if (stored && stored.salt) {
+      saltBase64 = bufferToBase64(stored.salt);
+    } else {
+      console.error("Salt not found in DB. Skipping persistence to avoid corruption.");
       return;
     }
-    const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
-
-    let saltBase64;
-    if (salt) {
-      saltBase64 = bufferToBase64(salt);
-    } else {
-      const stored = await loadVaultDataFromDB();
-      if (stored && stored.salt) {
-        saltBase64 = bufferToBase64(stored.salt);
-      } else {
-        console.error("Salt not found in DB. Skipping persistence to avoid corruption.");
-        return;
-      }
-    }
-
-    await saveVaultDataToDB(iv, ciphertext, saltBase64);
-    const backupPayload = {
-      iv: bufferToBase64(iv),
-      data: bufferToBase64(ciphertext),
-      salt: saltBase64,
-      timestamp: Date.now()
-    };
-    localStorage.setItem(VAULT_BACKUP_KEY, JSON.stringify(backupPayload));
-
-    vaultSyncChannel.postMessage({ type: 'vaultUpdate', payload: backupPayload });
-    console.log('💾 Vault data persisted successfully.');
-  } catch (err) {
-    console.error('🚨 Vault data persist error:', err);
-    alert('⚠️ CRITICAL: VAULT BACKUP FAILED!');
   }
+
+  await saveVaultDataToDB(iv, ciphertext, saltBase64);
+  const backupPayload = {
+    iv: bufferToBase64(iv),
+    data: bufferToBase64(ciphertext),
+    salt: saltBase64,
+    timestamp: Date.now()
+  };
+  localStorage.setItem(VAULT_BACKUP_KEY, JSON.stringify(backupPayload));
+
+  vaultSyncChannel.postMessage({ type: 'vaultUpdate', payload: backupPayload });
+  console.log('💾 Vault data persisted successfully.');
 }
 
 async function promptAndSaveVault() {
@@ -449,7 +406,164 @@ async function promptAndSaveVault() {
   await persistVaultData();
 }
 
-/* ========= Attempt to Restore from localBackup if DB is Empty ========= */
+/* ---------------------------------------------------------------------
+ *   DEVICE KEY
+ * ------------------------------------------------------------------- */
+
+async function getOrCreateDeviceKey() {
+  let storedKey = localStorage.getItem('deviceKey');
+  if (storedKey) {
+    return JSON.parse(storedKey);
+  }
+  try {
+    let keyPair = await crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256"
+      },
+      true,
+      ["encrypt", "decrypt"]
+    );
+    let exportedKey = await crypto.subtle.exportKey("jwk", keyPair.privateKey);
+    localStorage.setItem('deviceKey', JSON.stringify(exportedKey));
+    return exportedKey;
+  } catch (err) {
+    console.error("Error generating device key:", err);
+    return null;
+  }
+}
+
+/* ---------------------------------------------------------------------
+ *   CROSS-TAB CONCURRENCY FOR TRANSACTIONS
+ * ------------------------------------------------------------------- */
+
+function isTxInProgress() {
+  return localStorage.getItem('txLock') === 'true';
+}
+
+function startTx() {
+  localStorage.setItem('txLock', 'true');
+}
+
+function endTx() {
+  localStorage.setItem('txLock', 'false');
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.key === 'txLock') {
+    // if txLock changed to 'true', set local transactionLock to true
+    // if 'false', set local transactionLock = false
+    transactionLock = (event.newValue === 'true');
+  }
+});
+
+/* ---------------------------------------------------------------------
+ *   PASSWORD UI (INSTEAD OF PROMPT/CONFIRM)
+ * ------------------------------------------------------------------- */
+
+/**
+ * Display a modal for user to enter passphrase.
+ * @param {string} title - e.g., "Create Vault Passphrase" or "Enter Vault Passphrase"
+ * @param {boolean} needConfirm - whether to show a "confirm" field
+ * @returns {Promise<string|null>} passphrase or null if cancelled
+ */
+function openPasswordModal(title, needConfirm = false) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('passwordModal');
+    const titleElem = document.getElementById('passwordModalTitle');
+    const passInput = document.getElementById('passwordModalInput');
+    const confirmLabel = document.getElementById('confirmLabel');
+    const confirmInput = document.getElementById('confirmPasswordModalInput');
+    const cancelBtn = document.getElementById('passwordModalCancelBtn');
+    const okBtn = document.getElementById('passwordModalOkBtn');
+
+    titleElem.textContent = title;
+    passInput.value = '';
+    confirmInput.value = '';
+    confirmLabel.style.display = needConfirm ? 'block' : 'none';
+    confirmInput.style.display = needConfirm ? 'block' : 'none';
+
+    function cleanup(returnValue) {
+      // hide modal & remove event listeners
+      modal.style.display = 'none';
+      cancelBtn.removeEventListener('click', onCancel);
+      okBtn.removeEventListener('click', onOk);
+      resolve(returnValue);
+    }
+
+    function onCancel() {
+      cleanup(null);
+    }
+
+    function onOk() {
+      const passVal = passInput.value.trim();
+      if (!passVal || passVal.length < 8) {
+        alert("⚠️ Passphrase must be >= 8 characters.");
+        return;
+      }
+      if (needConfirm) {
+        const confirmVal = confirmInput.value.trim();
+        if (passVal !== confirmVal) {
+          alert("❌ Passphrases do not match!");
+          return;
+        }
+      }
+      cleanup(passVal);
+    }
+
+    cancelBtn.addEventListener('click', onCancel);
+    okBtn.addEventListener('click', onOk);
+
+    modal.style.display = 'block';
+    passInput.focus();
+  });
+}
+
+/* ---------------------------------------------------------------------
+ *   BACKUP RESTORE UI MODAL
+ * ------------------------------------------------------------------- */
+
+function openBackupRestoreModal() {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('backupRestoreModal');
+    const passInput = document.getElementById('backupRestorePassInput');
+    const cancelBtn = document.getElementById('backupRestoreCancelBtn');
+    const okBtn = document.getElementById('backupRestoreOkBtn');
+
+    function cleanup(returnVal) {
+      modal.style.display = 'none';
+      cancelBtn.removeEventListener('click', onCancel);
+      okBtn.removeEventListener('click', onOk);
+      resolve(returnVal);
+    }
+
+    function onCancel() {
+      cleanup(null);
+    }
+
+    async function onOk() {
+      const passVal = passInput.value.trim();
+      if (!passVal || passVal.length < 8) {
+        alert("Passphrase must be >= 8 chars.");
+        return;
+      }
+      cleanup(passVal);
+    }
+
+    cancelBtn.addEventListener('click', onCancel);
+    okBtn.addEventListener('click', onOk);
+    passInput.value = '';
+    modal.style.display = 'block';
+    passInput.focus();
+  });
+}
+
+/* ---------------------------------------------------------------------
+ *   MORE FRIENDLY BACKUP RESTORE
+ * ------------------------------------------------------------------- */
+
 async function tryLocalBackupRestore() {
   const backupStr = localStorage.getItem(VAULT_BACKUP_KEY);
   if (!backupStr) {
@@ -458,25 +572,23 @@ async function tryLocalBackupRestore() {
   }
   try {
     const backup = JSON.parse(backupStr);
-    // backup has .iv, .data, .salt
-    // We'll need a passphrase from user to derive key again, or attempt the old derivedKey
-    // Typically, you'd ask user for PIN to decrypt the backup. But for simplicity:
-    let pin = prompt("To restore from backup, enter your old passphrase (>=8 chars):");
-    if (!pin || pin.length < 8) {
-      alert("❌ Invalid passphrase for backup restore. Aborting.");
+    // open a modal to ask passphrase
+    const userPass = await openBackupRestoreModal();
+    if (!userPass) {
+      console.log("User cancelled backup restore.");
       return false;
     }
     const saltBuf = base64ToBuffer(backup.salt);
-    const attemptKey = await deriveKeyFromPIN(pin, saltBuf);
+    const attemptKey = await deriveKeyFromPIN(userPass, saltBuf);
     if (!attemptKey) {
       alert("❌ Could not derive key from backup passphrase.");
       return false;
     }
-    // Decrypt the data
+    // decrypt
     const ivBuf = base64ToBuffer(backup.iv);
     const cipherBuf = base64ToBuffer(backup.data);
     const decryptedData = await decryptData(attemptKey, ivBuf, cipherBuf);
-    // If success, store to DB
+
     vaultData = decryptedData;
     derivedKey = attemptKey;
     await persistVaultData(saltBuf);
@@ -489,60 +601,54 @@ async function tryLocalBackupRestore() {
   }
 }
 
-/* ========= Vault Create & Unlock Logic ========= */
+/* ---------------------------------------------------------------------
+ *   CREATE / UNLOCK VAULT
+ * ------------------------------------------------------------------- */
 
-/**
- * Attempt to load from DB (if found). If none, attempt local backup.
- * If still none, create a new vault. 
- */
 async function ensureSingleVaultOnThisDevice() {
   let existingDeviceKey = localStorage.getItem('deviceKey');
   const stored = await loadVaultDataFromDB();
   if (stored) {
-    console.log("🗃 Vault data found in DB. We'll let user unlock it by pressing 'Enter Vault'.");
     document.getElementById('enterVaultBtn').style.display = 'block';
     document.getElementById('lockedScreen').classList.remove('hidden');
   } else {
-    // DB is empty or corrupted
-    console.log("❌ No valid vault data in DB (or decode failed). Checking local backup...");
+    // DB empty or corrupted => try backup
     if (existingDeviceKey) {
-      // we have a device key, so let's attempt local backup restore
       let restored = await tryLocalBackupRestore();
       if (restored) {
-        // if restored, user can press "Enter Vault" to unlock 
         document.getElementById('enterVaultBtn').style.display = 'block';
         document.getElementById('lockedScreen').classList.remove('hidden');
         return;
       }
     }
-    // if no restore, we create new on user click
-    console.log("No backup restore done. We'll create new vault on user action...");
+    // else create on user click
     document.getElementById('enterVaultBtn').style.display = 'block';
     document.getElementById('lockedScreen').classList.remove('hidden');
   }
 }
 
-/** 
- * Creates a brand-new vault 
- */
 async function createNewVault() {
   let devKey = await getOrCreateDeviceKey();
-  let pin = prompt("Choose a passphrase/PIN (>=8 chars):");
-  if (!pin || pin.length < 8) {
-    alert("⚠️ Must provide valid passphrase (>=8). Aborting creation.");
+  const pin = await openPasswordModal("Create Vault Passphrase", true);
+  if (!pin) {
+    alert("❌ Vault creation cancelled.");
     return;
   }
-  const pinConfirm = prompt("Confirm your vault passphrase:");
-  if (pin !== pinConfirm) {
-    alert("❌ Passphrases do not match.");
-    return;
-  }
-  let credential = await performBiometricAuthenticationForCreation();
+  // Attempt biometric
+  const credential = await performBiometricAuthenticationForCreation();
   if (!credential || !credential.id) {
-    alert("Biometric creation failed/cancelled. Vault not created.");
-    return;
+    const fallback = confirm("Biometric creation failed. Proceed WITHOUT biometric?");
+    if (!fallback) {
+      alert("Vault not created.");
+      return;
+    }
+    // fallback: no credential
+    vaultData.credentialId = null;
+  } else {
+    vaultData.credentialId = bufferToBase64(credential.rawId);
   }
-  // init vault
+
+  // initialize vault data
   const nowSec = Math.floor(Date.now() / 1000);
   vaultData.lastUTCTimestamp = nowSec;
   vaultData.initialBioConstant = vaultData.bioConstant;
@@ -557,7 +663,6 @@ async function createNewVault() {
   vaultData.lastTransactionHash = '';
   vaultData.finalChainHash = '';
   vaultData.deviceKey = devKey;
-  vaultData.credentialId = bufferToBase64(credential.rawId);
 
   const salt = generateSalt();
   derivedKey = await deriveKeyFromPIN(pin, salt);
@@ -567,30 +672,21 @@ async function createNewVault() {
   }
   await persistVaultData(salt);
   vaultUnlocked = true;
+  localStorage.setItem('vaultUnlocked', 'true');
+  localStorage.setItem('vaultLock', 'unlocked');
   showVaultUI();
   initializeBioConstantAndUTCTime();
-  localStorage.setItem('vaultUnlocked', 'true');
-  // also set vaultLock = 'unlocked'
-  localStorage.setItem('vaultLock', 'unlocked');
   console.log("✅ New vault created & unlocked successfully.");
 }
 
-/**
- * Unlock existing vault 
- * 
- * 1. Load DB data 
- * 2. Check lockoutTimestamp 
- * 3. Prompt for PIN 
- * 4. If pass, do biometric 
- */
 async function unlockVault() {
   const stored = await loadVaultDataFromDB();
   if (!stored) {
-    alert("No vault data in DB. Creating new vault now...");
+    alert("No vault data found in DB. Creating new vault now...");
     await createNewVault();
     return;
   }
-  // Check if locked out
+  // check lockout from DB
   if (stored.lockoutTimestamp) {
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (currentTimestamp < stored.lockoutTimestamp) {
@@ -600,82 +696,63 @@ async function unlockVault() {
     } else {
       stored.lockoutTimestamp = null;
       stored.authAttempts = 0;
-      // We'll re-save after we fully decrypt and set vaultData
     }
   }
-
-  // Prompt for PIN
-  const pin = prompt("🔒 Enter your vault passphrase:");
+  const pin = await openPasswordModal("Enter Vault Passphrase", false);
   if (!pin) {
-    alert("❌ Passphrase is required.");
-    return handleFailedAuthAttempt(null); // pass 'null' so it doesn't re-save an old key
+    alert("❌ Vault unlock cancelled.");
+    return;
   }
-  if (pin.length < 8) {
-    alert("⚠️ Please use a stronger passphrase (>=8 chars).");
-    return handleFailedAuthAttempt(null);
-  }
-
   try {
     if (!stored.salt) throw new Error("No salt in stored vault data.");
     const attemptKey = await deriveKeyFromPIN(pin, stored.salt);
     if (!attemptKey) throw new Error("Could not derive key from PIN.");
 
-    const decryptedData = await decryptData(
-      attemptKey, 
-      stored.iv, 
-      stored.ciphertext
-    );
-
-    // success => update vaultData
+    const decryptedData = await decryptData(attemptKey, stored.iv, stored.ciphertext);
     vaultData = decryptedData;
-    derivedKey = attemptKey; // hold ephemeral key in memory
+    derivedKey = attemptKey;
     vaultData.lockoutTimestamp = stored.lockoutTimestamp;
     vaultData.authAttempts = stored.authAttempts;
 
-    // Check deviceKey
     let devKey = await getOrCreateDeviceKey();
     if (JSON.stringify(vaultData.deviceKey) !== JSON.stringify(devKey)) {
       alert("❌ This vault is not meant for this device (deviceKey mismatch).");
       return;
     }
-    // If credentialId is present, do a biometric assertion
+
+    // if vault has a credentialId, attempt biometric
     if (vaultData.credentialId) {
       const assertionOK = await performBiometricAssertion(vaultData.credentialId);
       if (!assertionOK) {
-        alert("❌ Biometric assertion failed. Unlock aborted.");
-        return handleFailedAuthAttempt(attemptKey);
+        const fallback = confirm("Biometric assertion failed. Proceed without biometric?");
+        if (!fallback) {
+          return handleFailedAuthAttempt();
+        }
+        // fallback => set credentialId = null 
+        vaultData.credentialId = null;
       }
-    } else {
-      console.warn("No credentialId in vault. Skipping biometric check.");
     }
-    // not locked out => we made it
+    // success => 
     vaultUnlocked = true;
     vaultData.authAttempts = 0;
     vaultData.lockoutTimestamp = null;
-    await promptAndSaveVault(); // save these changes
-    showVaultUI();
-    initializeBioConstantAndUTCTime();
+    await promptAndSaveVault();
     localStorage.setItem('vaultUnlocked', 'true');
     localStorage.setItem('vaultLock', 'unlocked');
-    console.log("🔓 Vault unlocked successfully.");
+    showVaultUI();
+    initializeBioConstantAndUTCTime();
   } catch (err) {
     alert(`❌ Unlock failed: ${err.message}`);
     console.error(err);
-    return handleFailedAuthAttempt(null);
+    return handleFailedAuthAttempt();
   }
 }
 
-async function handleFailedAuthAttempt(localKey) {
-  if (localKey) {
-    // if we do have a derived key, we can re-save
-    // but if user typed the wrong pass, no reason to re-save a new state
-    derivedKey = localKey;
-  }
+async function handleFailedAuthAttempt() {
   vaultData.authAttempts = (vaultData.authAttempts || 0) + 1;
   if (vaultData.authAttempts >= MAX_AUTH_ATTEMPTS) {
     vaultData.lockoutTimestamp = Math.floor(Date.now() / 1000) + LOCKOUT_DURATION_SECONDS;
     alert('❌ Max attempts exceeded. Locked out for 1 hour.');
-    // broadcast the lockout to other tabs
     vaultSyncChannel.postMessage({ type: 'lockout', lockoutTimestamp: vaultData.lockoutTimestamp });
   } else {
     alert(`❌ Authentication failed. ${MAX_AUTH_ATTEMPTS - vaultData.authAttempts} tries left.`);
@@ -696,7 +773,10 @@ function lockVault() {
   console.log('🔒 Vault locked by user action.');
 }
 
-/* ========= Periodic Increments & UI Updates ========= */
+/* ---------------------------------------------------------------------
+ *   PERIODIC INCREMENTS & UI
+ * ------------------------------------------------------------------- */
+
 function updatePeriodicIncrements() {
   if (!vaultData.joinTimestamp) return;
   const nowSec = Math.floor(Date.now() / 1000);
@@ -708,7 +788,7 @@ function updatePeriodicIncrements() {
     const bonus = difference * BIO_LINE_INCREMENT_AMOUNT;
     vaultData.initialBalanceTVM += bonus;
     vaultData.incrementsUsed = newIncrements;
-    console.log(`💥 Gave user ${bonus} TVM in lumpsum increments (3-mo intervals).`);
+    console.log(`💥 Gave user ${bonus} TVM for lumpsum increments (3-mo intervals).`);
   }
 }
 
@@ -731,6 +811,7 @@ function populateWalletUI() {
   const tvmFormatted = formatWithCommas(vaultData.balanceTVM);
   const usdFormatted = formatWithCommas(vaultData.balanceUSD);
 
+  // assume these DOM elements exist
   document.getElementById('tvmBalance').textContent = `💰 Balance: ${tvmFormatted} TVM`;
   document.getElementById('usdBalance').textContent = `💵 Equivalent to ${usdFormatted} USD`;
 
@@ -745,20 +826,20 @@ function populateWalletUI() {
 function initializeBioConstantAndUTCTime() {
   if (bioLineInterval) clearInterval(bioLineInterval);
 
-  // do an immediate refresh
+  // do an immediate sync
   const currentTimestamp = Math.floor(Date.now() / 1000);
   const elapsedSeconds = currentTimestamp - vaultData.lastUTCTimestamp;
   vaultData.bioConstant += elapsedSeconds;
   vaultData.lastUTCTimestamp = currentTimestamp;
   populateWalletUI();
 
-  // Instead of 1 second, use 30 seconds to reduce overhead
+  // every 30 seconds, increment time & save
   bioLineInterval = setInterval(async () => {
     vaultData.bioConstant += 30;
     vaultData.lastUTCTimestamp += 30;
     populateWalletUI();
     await promptAndSaveVault();
-  }, 30_000);  // 30,000ms = 30s
+  }, 30000);
 }
 
 function showVaultUI() {
@@ -769,7 +850,10 @@ function showVaultUI() {
   renderTransactionTable();
 }
 
-/* ========= UI Helpers ========= */
+/* ---------------------------------------------------------------------
+ *   UI HELPER FUNCTIONS
+ * ------------------------------------------------------------------- */
+
 function handleCopyBioIBAN() {
   const bioIBANInput = document.getElementById('bioibanInput');
   if (!bioIBANInput || !bioIBANInput.value.trim()) {
@@ -786,6 +870,7 @@ function handleCopyBioIBAN() {
 
 function exportTransactionTable() {
   const table = document.getElementById('transactionTable');
+  if (!table) return;
   const rows = table.querySelectorAll('tr');
   let csvContent = "data:text/csv;charset=utf-8,";
   rows.forEach(row => {
@@ -810,6 +895,7 @@ function exportTransactionTable() {
 function showBioCatchPopup(encryptedBioCatch) {
   const bioCatchPopup = document.getElementById('bioCatchPopup');
   const bioCatchNumberText = document.getElementById('bioCatchNumberText');
+  if (!bioCatchPopup || !bioCatchNumberText) return;
   bioCatchNumberText.textContent = encryptedBioCatch;
   bioCatchPopup.style.display = 'flex';
 }
@@ -818,9 +904,8 @@ function renderTransactionTable() {
   const tbody = document.getElementById('transactionBody');
   if (!tbody) return;
   tbody.innerHTML = '';
-  // sort descending by timestamp for display
   vaultData.transactions
-    .sort((a, b) => b.timestamp - a.timestamp)
+    .sort((a, b) => b.timestamp - a.timestamp)  // newest first
     .forEach(tx => {
       const row = document.createElement('tr');
       let bioIBANCell = '—';
@@ -850,7 +935,10 @@ function renderTransactionTable() {
     });
 }
 
-/* ========= Snapshots for Bio‑Catch Validation ========= */
+/* ---------------------------------------------------------------------
+ *   SNAPSHOTS FOR BIO‑CATCH
+ * ------------------------------------------------------------------- */
+
 function serializeVaultSnapshotForBioCatch(vData) {
   const fieldSep = '|';
   const txSep = '^';
@@ -920,7 +1008,10 @@ function deserializeVaultSnapshotFromBioCatch(base64String) {
   };
 }
 
-/* ========= Bio‑Catch Generation & Validation ========= */
+/* ---------------------------------------------------------------------
+ *   BIO‑CATCH GENERATION & VALIDATION
+ * ------------------------------------------------------------------- */
+
 function generateBioCatchNumber(senderBioIBAN, receiverBioIBAN, amount, timestamp, senderBalance, finalChainHash) {
   const senderVaultSnapshotEncoded = serializeVaultSnapshotForBioCatch(vaultData);
   const senderNumeric = parseInt(senderBioIBAN.slice(3));
@@ -973,7 +1064,10 @@ function validateBioCatchNumber(bioCatchNumber, claimedAmount) {
   return { valid: true, message: 'OK', chainHash, claimedSenderIBAN, senderVaultSnapshot };
 }
 
-/* ========= Transaction Handlers ========= */
+/* ---------------------------------------------------------------------
+ *   TRANSACTION HANDLERS (WITH CROSS-TAB LOCK)
+ * ------------------------------------------------------------------- */
+
 let transactionLock = false;
 
 async function handleSendTransaction() {
@@ -981,8 +1075,13 @@ async function handleSendTransaction() {
     alert('❌ Please unlock the vault first.');
     return;
   }
+  // check cross-tab lock
+  if (isTxInProgress()) {
+    alert('🔒 Another tab has a transaction in progress. Please wait.');
+    return;
+  }
   if (transactionLock) {
-    alert('🔒 A transaction is already in progress. Please wait.');
+    alert('🔒 A transaction is already in progress here. Please wait.');
     return;
   }
   const authOk = await authenticateForTransaction();
@@ -1009,6 +1108,7 @@ async function handleSendTransaction() {
   }
 
   transactionLock = true;
+  startTx();
   try {
     vaultData.finalChainHash = await computeFullChainHash(vaultData.transactions);
     const currentTimestamp = vaultData.lastUTCTimestamp;
@@ -1020,13 +1120,12 @@ async function handleSendTransaction() {
       vaultData.balanceTVM,
       vaultData.finalChainHash
     );
-    // ensure uniqueness
+    // uniqueness check
     for (let tx of vaultData.transactions) {
       if (tx.bioCatch) {
         const existingPlain = await decryptBioCatchNumber(tx.bioCatch);
         if (existingPlain === plainBioCatchNumber) {
           alert('❌ This BioCatch number already exists. Try again.');
-          transactionLock = false;
           return;
         }
       }
@@ -1050,6 +1149,8 @@ async function handleSendTransaction() {
     await promptAndSaveVault();
     alert(`✅ Transaction successful! ${amount} TVM sent to ${receiverBioIBAN}`);
     showBioCatchPopup(obfuscatedCatch);
+
+    // clear inputs
     document.getElementById('receiverBioIBAN').value = '';
     document.getElementById('catchOutAmount').value = '';
     renderTransactionTable();
@@ -1058,6 +1159,7 @@ async function handleSendTransaction() {
     alert('❌ An error occurred while processing the transaction. Please try again.');
   } finally {
     transactionLock = false;
+    endTx();
   }
 }
 
@@ -1066,26 +1168,29 @@ async function handleReceiveTransaction() {
     alert('❌ Please unlock the vault first.');
     return;
   }
+  if (isTxInProgress()) {
+    alert('🔒 Another tab has a transaction in progress. Please wait.');
+    return;
+  }
   if (transactionLock) {
-    alert('🔒 A transaction is already in progress. Please wait.');
+    alert('🔒 A transaction is already in progress here. Please wait.');
     return;
   }
-  const encryptedBioCatchInput = document.getElementById('catchInBioCatch')?.value.trim();
-  const amount = parseFloat(document.getElementById('catchInAmount')?.value.trim());
-
-  if (!encryptedBioCatchInput || isNaN(amount) || amount <= 0) {
-    alert('❌ Please enter a valid (base64) BioCatch Number and Amount.');
-    return;
-  }
-
   transactionLock = true;
+  startTx();
   try {
+    const encryptedBioCatchInput = document.getElementById('catchInBioCatch')?.value.trim();
+    const amount = parseFloat(document.getElementById('catchInAmount')?.value.trim());
+    if (!encryptedBioCatchInput || isNaN(amount) || amount <= 0) {
+      alert('❌ Please enter a valid (base64) BioCatch Number and Amount.');
+      return;
+    }
     const bioCatchNumber = await decryptBioCatchNumber(encryptedBioCatchInput);
     if (!bioCatchNumber) {
       alert('❌ Unable to decode the provided BioCatch Number. Please ensure it is correct.');
       return;
     }
-    // check if we used this bioCatchNumber before
+    // check uniqueness
     for (let tx of vaultData.transactions) {
       if (tx.bioCatch) {
         const existingPlain = await decryptBioCatchNumber(tx.bioCatch);
@@ -1128,6 +1233,7 @@ async function handleReceiveTransaction() {
     populateWalletUI();
     await promptAndSaveVault();
     alert(`✅ Transaction received successfully! ${amount} TVM added.`);
+
     document.getElementById('catchInBioCatch').value = '';
     document.getElementById('catchInAmount').value = '';
     renderTransactionTable();
@@ -1136,13 +1242,16 @@ async function handleReceiveTransaction() {
     alert('❌ An error occurred. Please try again.');
   } finally {
     transactionLock = false;
+    endTx();
   }
 }
 
-/* ========= Multi-Tab & Offline Handling ========= */
+/* ---------------------------------------------------------------------
+ *   MULTI-TAB & OFFLINE HANDLING
+ * ------------------------------------------------------------------- */
 
-// listens to localStorage changes so we unify lock/unlock states
 function preventMultipleVaults() {
+  // React to localStorage changes => unify lock/unlock across tabs
   window.addEventListener('storage', (event) => {
     if (event.key === 'vaultUnlocked') {
       if (event.newValue === 'true' && !vaultUnlocked) {
@@ -1154,7 +1263,6 @@ function preventMultipleVaults() {
         lockVault();
       }
     }
-    // We now also handle vaultLock changes (useful if we set 'unlocked')
     if (event.key === 'vaultLock') {
       if (event.newValue === 'locked' && vaultUnlocked) {
         lockVault();
@@ -1163,7 +1271,6 @@ function preventMultipleVaults() {
   });
 }
 
-// sets or checks a localStorage 'vaultLock'
 function enforceSingleVault() {
   const vaultLock = localStorage.getItem('vaultLock');
   if (!vaultLock) {
@@ -1173,12 +1280,14 @@ function enforceSingleVault() {
   }
 }
 
-/* ========= Startup UI Initialization ========= */
+/* ---------------------------------------------------------------------
+ *   STARTUP UI INITIALIZATION
+ * ------------------------------------------------------------------- */
+
 window.addEventListener('DOMContentLoaded', async () => {
   // minimal check to avoid infinite redirect loops
   let lastURL = localStorage.getItem("last_session_url");
   if (lastURL && lastURL !== window.location.href) {
-    // ensure it's not the same URL that might cause a loop
     if (!/avoid-loop/.test(window.location.href)) {
       window.location.href = `${lastURL}?avoid-loop=1`;
       return;
@@ -1193,7 +1302,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   await ensureSingleVaultOnThisDevice();
   preventMultipleVaults();
   enforceStoragePersistence();
-  // cross-tab sync
+
   vaultSyncChannel.onmessage = async (e) => {
     if (e.data?.type === 'vaultUpdate') {
       try {
@@ -1211,7 +1320,6 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     }
     else if (e.data?.type === 'lockout') {
-      // if another tab locked out, reflect it here
       vaultData.lockoutTimestamp = e.data.lockoutTimestamp;
       alert(`⚠️ The vault is locked out until ${formatDisplayDate(vaultData.lockoutTimestamp)}!`);
     }
@@ -1235,18 +1343,17 @@ async function enforceStoragePersistence() {
 }
 
 function initializeUI() {
+  // "Enter Vault" button -> either create or unlock
   const enterVaultBtn = document.getElementById('enterVaultBtn');
   if (enterVaultBtn) {
-    enterVaultBtn.addEventListener('click', () => {
-      loadVaultDataFromDB().then(stored => {
-        if (!stored) {
-          createNewVault();
-        } else {
-          unlockVault();
-        }
-      });
+    enterVaultBtn.addEventListener('click', async () => {
+      const stored = await loadVaultDataFromDB();
+      if (!stored) {
+        await createNewVault();
+      } else {
+        await unlockVault();
+      }
     });
-    console.log("✅ enterVaultBtn is ready!");
   } else {
     console.error("❌ enterVaultBtn NOT FOUND in DOM!");
   }
@@ -1267,7 +1374,6 @@ function initializeUI() {
   const bioCatchPopup = document.getElementById('bioCatchPopup');
   const closeBioCatchPopupBtn = document.getElementById('closeBioCatchPopup');
   const copyBioCatchPopupBtn = document.getElementById('copyBioCatchBtn');
-
   if (closeBioCatchPopupBtn) {
     closeBioCatchPopupBtn.addEventListener('click', () => {
       bioCatchPopup.style.display = 'none';
