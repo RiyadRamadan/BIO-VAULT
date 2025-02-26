@@ -1,15 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8" />
   <title>Bio‑Vault | P2P UTC Ledger</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- PWA Manifest -->
+  <!-- Optionally a PWA manifest / service worker -->
   <link rel="manifest" href="./manifest.json">
-
-  <!-- Register Service Worker for PWA -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
@@ -20,410 +17,170 @@
     }
   </script>
 
+  <!-- Ethers.js for on-chain calls (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/ethers/dist/ethers.min.js"></script>
 
-
-  <!-- Inline CSS -->
   <style>
-    /* General Styles */
     body {
-      background: linear-gradient(to left ,#2f4979 ,#15264d,#15264d,#2f4979);
+      background: linear-gradient(to left, #2f4979, #15264d);
       color: #fff;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      text-align: center;
-      margin: 0;
-      padding: 20px;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      margin: 0; padding: 20px;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
+      display: flex; flex-direction: column; align-items: center;
     }
-
-    h1 {
-      margin-top: 0;
-      font-size: 2em;
+    h1, h2, h3 {
+      margin: 10px 0; text-align: center;
     }
-
-    h2,
-    h3 {
-      margin: 10px 0;
-    }
-
-    .hidden {
-      display: none;
-    }
-
+    .hidden { display: none; }
     button {
-      background: #2563eb;
-      color: #fff;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 5px;
-      font-size: 16px;
-      margin: 5px;
-      cursor: pointer;
+      background: #2258c4; color: #fff;
+      padding: 10px 20px; border: none; border-radius: 5px;
+      font-size: 16px; margin: 5px; cursor: pointer;
       transition: background 0.3s ease;
     }
-
     button:hover {
-      background: #1e40af;
+      background: #144180;
     }
-
+    #lockedScreen { text-align: center; margin-top: 50px; }
+    #vaultUI { max-width: 900px; width: 100%; margin-top: 20px; }
     .section {
-      margin: 20px;
-      width: 85%;
-      max-width: 800px;
+      margin: 20px auto; width: 85%; max-width: 800px; text-align: center;
     }
-
-    .info {
-      font-size: 18px;
-      margin-top: 10px;
-    }
-
-    /* Transaction Table */
-    #transactionTable {
-      width: 100%;
-      max-width: 800px;
-      margin: 20px auto;
-      border-collapse: collapse;
-      background: #fff;
-      color: #000;
-      text-align: left;
-      border-radius: 5px;
-      overflow: hidden;
-    }
-   
-
-    #transactionTable th,
-    #transactionTable td {
-      padding: 10px;
-      border-bottom: 1px solid #ccc;
-    }
-
-    #transactionTable th {
-      background: #f3f4f6;
-    }
-
-    /* Bio-Line & UTC styling */
-    #bioLineUTCContainer {
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      background-color: rgba(255, 255, 255, 0.1);
-      padding: 15px 30px;
-      border-radius: 10px;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-      font-size: 18px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-
-    /* Lock Vault & Enter Vault Buttons */
-    #lockVaultBtn,
-    #enterVaultBtn {
-      background: #6b7280;
-      position: absolute;
-      top: 20px;
-      right: 20px;
-    }
-
-    #enterVaultBtn {
-      bottom: 20px;
-      top: auto;
-    }
-
-    #lockVaultBtn:hover,
-    #enterVaultBtn:hover {
-      background: #4b5563;
-    }
-
-    /* Terminate Vault */
-    #terminateBtn {
-      right: 20px;
-      background: #ef4444;
-      padding: 10px 20px;
-      font-size: 14px;
-      border-radius: 5px;
-    }
-
-    #terminateBtn:hover {
-      background: #dc2626;
-    }
-
-    /* Input Fields */
     .input-field {
-      padding: 10px;
-      margin: 10px 5px;
-      border: none;
-      border-radius: 4px;
-      width: 45%;
-      max-width: 200px;
-      font-size: 16px;
+      padding: 10px; margin: 10px 5px;
+      border: none; border-radius: 4px;
+      width: 45%; max-width: 300px; font-size: 16px;
     }
-
-    /* Catch In & Catch Out Sections */
-    #catchInSection,
-    #catchOutSection {
-      background-color: rgba(255, 255, 255, 0.1);
-      padding: 20px;
-      border-radius: 10px;
-      max-width: 600px;
-      margin: 20px auto;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    #transactionTable {
+      width: 100%; border-collapse: collapse;
+      background: #fff; color: #000; margin-top: 20px;
+      border-radius: 5px; overflow: hidden;
     }
-
-    /* Buttons coloring */
-    #catchInBtn {
-      background: #10b981;
+    #transactionTable th, #transactionTable td {
+      padding: 10px; border-bottom: 1px solid #ccc; word-wrap: break-word;
     }
-
-    #catchInBtn:hover {
-      background: #059669;
-    }
-
-    #catchOutBtn {
-      background: #f97316;
-    }
-
-    #catchOutBtn:hover {
-      background: #ea580c;
-    }
-
-    /* Popup for newly generated Bio‑Catch */
+    #transactionTable th { background: #f3f4f6; }
     .popup {
-      background-color: rgba(0, 0, 0, 0.8);
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      display: none;
-      justify-content: center;
-      align-items: center;
+      background-color: rgba(0,0,0,0.8);
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      display: none; justify-content: center; align-items: center;
       z-index: 9999;
     }
-
     .popup-content {
-      background-color: #fff;
-      color: #000;
-      padding: 20px;
-      border-radius: 8px;
-      text-align: center;
-      max-width: 400px;
-      width: 80%;
+      background: #fff; color: #000; padding: 20px;
+      border-radius: 8px; text-align: center; max-width: 400px; width: 80%;
     }
-
-    .popup-content button {
-      margin-top: 20px;
+    #passModal {
+      display: none; position: fixed; z-index: 99999;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.6); justify-content: center; align-items: center;
     }
-
-    /* Locked Screen Message */
-    #lockedScreen {
-      margin-top: 80px;
+    #passModal .popup-content {
+      background: #fff; color: #000; padding: 20px;
+      border-radius: 8px; text-align: center;
+      max-width: 400px; width: 80%; margin: 80px auto; position: relative;
     }
-
-    /* P2P Info area */
-    #p2pInfo {
-      margin-top: 30px;
+    #passModalTitle { margin-bottom: 15px; font-size: 1.2em; font-weight: 600; }
+    #passModalInput, #passModalConfirmInput {
+      width: 80%; padding: 10px; margin: 10px 0;
+      border-radius: 4px; border: 1px solid #ccc;
     }
-
-    /* Export Button */
-    #exportBtn {
-      background: #f59e0b;
-    }
-
-    #exportBtn:hover {
-      background: #d97706;
-    }
-
-    /* Responsive Design */
-    @media (max-width: 1024px) {
-      #bioLineUTCContainer {
-        flex-direction: column;
-      }
-
-      .input-field {
-        width: 90%;
-        max-width: none;
-      }
-
-      #transactionTable {
-        font-size: 14px;
-      }
-
-      h1 {
-        font-size: 1.8em;
-      }
-
-      h2,
-      h3 {
-        font-size: 1.2em;
-      }
-    }
-
-    @media (max-width: 768px) {
-       /* تعديل عرض عمود Bio‑Catch */
-   /* تحديد عرض عمود Bio‑Catch إلى 50px والسماح بتفريغ النص */
-    #transactionTable th:nth-child(2),
-    #transactionTable td:nth-child(2) {
-        max-width: 50px;
-        white-space: normal;       /* يسمح بتفريغ النص إلى أسطر جديدة */
-        word-wrap: break-word;     /* يكسر الكلمات الطويلة لتناسب العرض */
-        /* يمكنك استخدام word-break بدلاً من word-wrap إذا لزم الأمر */
-        /* word-break: break-all; */
-    }
-      #lockVaultBtn {
-        background: #6b7280;
-        position: absolute;
-        top: 3px;
-        right: 20px;
-      }
-      #catchInSection, #catchOutSection {
-        background-color: rgba(255, 255, 255, 0.1);
-        padding: 20px;
-        border-radius: 10px;
-        max-width: 600px;
-        margin: 20px auto;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        width: 80%;
-      }
-      .input-field {
-        width: 70%;
-        max-width: none;
-      }
-
-      #bioLineUTCContainer {
-        width: 72%;
-      }
-
-      #transactionTable {
-        font-size: 13px;
-      }
-
-      h1 {
-        font-size: 1.5em;
-      }
-
-      h2,
-      h3 {
-        font-size: 1em;
-      }
-    }
-
-    @media (max-width: 480px) {
-      button {
-        padding: 8px 16px;
-        font-size: 14px;
-      }
-
-      .popup-content {
-        max-width: 90%;
-      }
-
-      #transactionTable {
-        font-size: 9px;
-      }
-       /* تعديل عرض عمود Bio‑Catch */
-   /* تحديد عرض عمود Bio‑Catch إلى 50px والسماح بتفريغ النص */
-    #transactionTable th:nth-child(2),
-    #transactionTable td:nth-child(2) {
-        max-width: 50px;
-        white-space: normal;       /* يسمح بتفريغ النص إلى أسطر جديدة */
-        word-wrap: break-word;     /* يكسر الكلمات الطويلة لتناسب العرض */
-        /* يمكنك استخدام word-break بدلاً من word-wrap إذا لزم الأمر */
-        /* word-break: break-all; */
-    }
+    #lockVaultBtn {
+      position: absolute; top: 20px; right: 20px;
     }
   </style>
 </head>
 
 <body>
-  <!-- Locked Vault Screen -->
+  <!-- Locked Screen -->
   <div id="lockedScreen">
-    <h1>🌍 Bio‑Vault</h1>
-    <h2>WELCOME TO YOUR VAULT WHERE THE TRUE VALUE OF MONEY IS.</h2>
-    <button id="enterVaultBtn" aria-label="Enter Vault">Enter Vault</button>
+    <h1>Bio‑Vault</h1>
+    <h2>WELCOME TO YOUR VAULT<br>WHERE THE TRUE VALUE OF MONEY IS</h2>
+    <button id="enterVaultBtn">Enter Vault</button>
   </div>
 
-  <!-- Lock & Terminate Buttons -->
-  <button id="lockVaultBtn" class="hidden" aria-label="Lock Vault">Lock Vault</button>
-  
-  <!-- Vault UI -->
+  <!-- Passphrase Modal (PIN) -->
+  <div id="passModal">
+    <div class="popup-content">
+      <h3 id="passModalTitle">Enter Passphrase</h3>
+      <label id="passModalConfirmLabel">Confirm Passphrase:</label><br>
+      <input type="password" id="passModalInput" placeholder="Enter passphrase"><br>
+      <input type="password" id="passModalConfirmInput" placeholder="Confirm passphrase"><br>
+      <button id="passModalCancelBtn">Cancel</button>
+      <button id="passModalSaveBtn">Save</button>
+    </div>
+  </div>
+
+  <button id="lockVaultBtn" class="hidden">Lock Vault</button>
+
+  <!-- Main Vault UI -->
   <div id="vaultUI" class="hidden">
-    <!-- Bio-IBAN -->
     <div class="section">
-      <label for="bioibanInput">Your Bio‑IBAN:</label><br />
-      <input type="text" id="bioibanInput" class="input-field" placeholder="BIO..." readonly />
-      <button id="copyBioIBANBtn" aria-label="Copy Bio-IBAN">Copy</button>
+      <label>Your Bio‑IBAN:</label><br>
+      <input type="text" id="bioibanInput" class="input-field" placeholder="BIO..." readonly>
+      <button id="copyBioIBANBtn">Copy</button>
     </div>
 
-    <!-- Balances -->
-    <div id="balanceContainer" class="info">
-      <span id="tvmBalance">Balance: 0 TVM</span><br />
-      <span id="usdBalance">Equivalent to 0 USD</span><br />
-      
+    <div class="section">
+      <span id="tvmBalance">Balance: 0 TVM</span><br>
+      <span id="usdBalance">Equivalent to 0 USD</span>
     </div>
 
-    <!-- Bio-Line + UTC -->
-    <div id="bioLineUTCContainer" class="section">
-      <div id="bioLineText">Bio‑Line: 0</div>
-      <div id="utcTime">...</div>
+    <div class="section" id="bioLineUTCContainer">
+      <div id="bioLineText">🔄 BonusConstant: 0</div>
+      <div id="utcTime">UTC Time: ...</div>
     </div>
-   <div id="passModal" class="modal">
-    <h2 id="passModalTitle"></h2>
-    <input id="passModalInput" type="password" placeholder="Passphrase (>=8 chars)" />
-    <label id="passModalConfirmLabel" for="passModalConfirmInput">Confirm:</label>
-    <input id="passModalConfirmInput" type="password" />
-    <button id="passModalCancelBtn">Cancel</button>
-    <button id="passModalSaveBtn">Save</button>
-   </div>
 
+    <!-- WALLET ADDRESS -->
+    <div class="section">
+      <label>On‑Chain Wallet Address:</label><br>
+      <input type="text" id="userWalletAddress" class="input-field" placeholder="0xYourWallet...">
+      <button id="saveWalletBtn">Save Wallet</button>
+      <button id="autoConnectWalletBtn">Auto-Connect MetaMask</button>
+    </div>
 
     <!-- Catch In -->
     <div class="section" id="catchInSection">
-      <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio‑Catch # here">
+      <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio‑Catch #">
       <input type="number" id="catchInAmount" class="input-field" placeholder="Amount (TVM)">
-      <button id="catchInBtn" aria-label="Catch In">Catch In</button>
+      <button id="catchInBtn">Catch In</button>
     </div>
 
     <!-- Catch Out -->
     <div class="section" id="catchOutSection">
       <input type="text" id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio‑IBAN">
       <input type="number" id="catchOutAmount" class="input-field" placeholder="Amount (TVM)">
-      <button id="catchOutBtn" aria-label="Catch Out">Catch Out</button>
+      <button id="catchOutBtn">Catch Out</button>
     </div>
 
-    <!-- Transaction History -->
-    <h3>Transaction History
-
-    </h3>
+    <h3>Transaction History</h3>
     <div class="section">
-      <button id="exportBtn" aria-label="Export Transactions">Export Transactions</button>
+      <button id="exportBtn">Export Transactions</button>
+      <button id="exportBackupBtn">Backup Vault</button>
     </div>
     <table id="transactionTable">
       <thead>
         <tr>
-          <th>Bio‑IBAN</th>
+          <th>Bio‑IBAN / Bonus</th>
           <th>Bio‑Catch</th>
           <th>Amount (TVM)</th>
           <th>Date/Time</th>
           <th>Status</th>
+          <!-- "Redeem" column for bridging to on-chain -->
+          <th>Redeem Bonus</th>
         </tr>
       </thead>
       <tbody id="transactionBody"></tbody>
     </table>
-   
 
-    <!-- P2P Connection Controls -->
-    <div id="p2pInfo" class="section">
-     
+    <div class="section" id="p2pInfo">
       <span>(Exchange Rate: 1 USD = 12 TVM)</span>
-      <!-- Removed Start and Connect buttons as per instructions -->
     </div>
   </div>
 
-  <!-- Popup for newly generated Bio‑Catch -->
-  <div id="bioCatchPopup" class="popup" aria-modal="true" role="dialog">
+  <!-- Bio-Catch Popup -->
+  <div id="bioCatchPopup" class="popup">
     <div class="popup-content">
       <h3>Your Bio‑Catch Number</h3>
       <p id="bioCatchNumberText"></p>
@@ -432,12 +189,88 @@
     </div>
   </div>
 
-  <div class="section" id="footer">
-    <p>By RR.R to Humanity</p>
+  <div id="footer" class="section">
+    <p style="color: #fff;">By RR.R – for Humanity</p>
   </div>
-  <button id="terminateBtn" class="hidden" aria-label="Terminate Vault">Terminate Vault</button>
-  <!-- Scripts -->
-  <script src="./main.js"></script>
-</body>
 
+  <!-- main.js (Offline Vault) -->
+  <script src="./main.js"></script>
+
+  <!-- Additional inline to add the 'Redeem Bonus' button logic -->
+  <script>
+    window.addEventListener('load', () => {
+      // Monkey-patch renderTransactionTable
+      if (typeof renderTransactionTable === 'function') {
+        window.originalRenderTransactionTable = renderTransactionTable;
+        window.renderTransactionTable = function() {
+          originalRenderTransactionTable(); 
+          const tbody = document.getElementById('transactionBody');
+          if (!tbody) return;
+          let txList = [...vaultData.transactions].sort((a, b) => b.timestamp - a.timestamp);
+          const rows = tbody.querySelectorAll('tr');
+
+          rows.forEach((row, i) => {
+            const tx = txList[i];
+            const lastCell = row.insertCell(-1);
+            if (tx.type === 'cashback') {
+              const redeemBtn = document.createElement('button');
+              redeemBtn.textContent = 'Redeem On Chain';
+              redeemBtn.onclick = () => {
+                if (!vaultData.userWallet || vaultData.userWallet.length < 5) {
+                  alert('Please set your wallet address first!');
+                  return;
+                }
+                redeemBonusOnChain(tx);
+              };
+              lastCell.appendChild(redeemBtn);
+            } else {
+              lastCell.innerHTML = '—';
+            }
+          });
+        };
+      }
+
+      // Save wallet
+      const saveWalletBtn = document.getElementById('saveWalletBtn');
+      if (saveWalletBtn) {
+        saveWalletBtn.addEventListener('click', handleSaveWallet);
+      }
+      const autoConnectBtn = document.getElementById('autoConnectWalletBtn');
+      if (autoConnectBtn) {
+        autoConnectBtn.addEventListener('click', handleAutoConnectWallet);
+      }
+    });
+
+    function handleSaveWallet() {
+      const addr = document.getElementById('userWalletAddress').value.trim();
+      if (!addr.startsWith('0x') || addr.length < 10) {
+        alert('Invalid wallet address');
+        return;
+      }
+      vaultData.userWallet = addr;
+      promptAndSaveVault();
+      alert('Wallet address saved to your vault.');
+    }
+
+    async function handleAutoConnectWallet() {
+      if (!window.ethereum) {
+        alert('No MetaMask or web3 wallet found!');
+        return;
+      }
+      try {
+        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        const signer = provider.getSigner();
+        const userAddress = await signer.getAddress();
+        document.getElementById('userWalletAddress').value = userAddress;
+        vaultData.userWallet = userAddress;
+        await promptAndSaveVault();
+        alert(`Auto-connected! Wallet = ${userAddress}`);
+      } catch (err) {
+        console.error('AutoConnect error:', err);
+        alert('Failed to connect wallet. Check console.');
+      }
+    }
+  </script>
+</body>
 </html>
