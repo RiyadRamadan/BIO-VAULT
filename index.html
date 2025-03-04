@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- Optional: PWA Manifest & Service Worker -->
+  <!-- Removed icon path from manifest or point it to a valid image -->
   <link rel="manifest" href="./manifest.json">
   <script>
     if ('serviceWorker' in navigator) {
@@ -17,9 +18,8 @@
     }
   </script>
 
-  <!-- Ethers.js (for on‑chain integration if needed) -->
- <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
-
+  <!-- Ethers.js (UMD build) => ensures global 'ethers' is defined -->
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
 
   <!-- Basic styling -->
   <style>
@@ -302,6 +302,11 @@
     <div class="section">
       <button id="exportBtn">Export Transactions</button>
       <button id="exportBackupBtn">Backup Vault</button>
+      <!-- Example: For the user-friendly .vault backup -->
+      <button id="exportFriendlyBtn">Export Friendly Backup</button>
+      <br>
+      <label>Import .vault:</label>
+      <input type="file" id="importVaultFileInput" accept=".vault">
     </div>
     <table id="transactionTable">
       <thead>
