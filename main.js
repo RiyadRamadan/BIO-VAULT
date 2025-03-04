@@ -703,9 +703,18 @@ function renderTransactionTable(){
     }
     else if(tx.type==='increment'){ bioIBANCell='Periodic Increment'; }
 
+    // (1) Truncate the displayed BioCatch to 12 chars
+    // but keep the original in tx.bioCatch for copying or other logic
+    let truncatedBioCatch='';
+    if(tx.bioCatch && tx.bioCatch.length>12){
+      truncatedBioCatch = tx.bioCatch.slice(0,12) + '...';
+    } else {
+      truncatedBioCatch = tx.bioCatch || '—';
+    }
+
     row.innerHTML=`
       <td>${bioIBANCell}</td>
-      <td>${bioCatchCell}</td>
+      <td>${truncatedBioCatch}</td>
       <td>${amtCell}</td>
       <td>${dateCell}</td>
       <td>${statusCell}</td>
@@ -765,12 +774,23 @@ function populateWalletUI(){
   }
 }
 
+/**
+ * (2) When showing BioCatch in the pop-up, we only display 12 chars,
+ * but store the full text in data-fullCatch so the Copy button
+ * grabs the entire string.
+ */
 function showBioCatchPopup(encBio){
   let popup=document.getElementById('bioCatchPopup');
   if(!popup)return;
   popup.style.display='flex';
+  
   let bcTxt=document.getElementById('bioCatchNumberText');
-  if(bcTxt) bcTxt.textContent=encBio;
+  if(!bcTxt) return;
+
+  // Truncated for display
+  let truncated = (encBio.length>12) ? encBio.slice(0,12)+"..." : encBio;
+  bcTxt.textContent = truncated;
+  bcTxt.dataset.fullCatch = encBio;  // Store entire string for copying
 }
 
 function exportTransactionTable(){
@@ -814,20 +834,12 @@ function exportVaultBackup(){
  * (NEW) USER-FRIENDLY BACKUP: For Mobile, with a .vault extension
  ************************************************************************/
 function exportVaultBackupForMobile(){
-  /**
-   * We still store the same JSON internally, but we use a custom extension
-   * so users won't see "just JSON." They get "myVault.vault" or similar.
-   */
   const backupObj = vaultData;
-  // Convert it to string
   const textData = JSON.stringify(backupObj);
-  // Optionally, you could do some minimal encryption, but let's keep it simple:
   const blob = new Blob([textData], { type: 'application/octet-stream' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  // The extension .vault signals to the user (and possibly your PWA) that 
-  // this is a "special" file. 
   a.download = 'myBioVault.vault';
   document.body.appendChild(a);
   a.click();
@@ -842,25 +854,18 @@ function exportVaultBackupForMobile(){
  ************************************************************************/
 async function importVaultBackupFromFile(file){
   try {
-    // Read the file as text
     const text = await file.text();
-    // Attempt to parse as JSON
     const parsed = JSON.parse(text);
 
-    // Merge or overwrite existing vaultData, 
-    // but the safest approach is to do a straightforward replacement:
+    // Overwrite existing vaultData with the imported data
     vaultData = parsed;
 
-    // Re-persist into IDB using the existing derivedKey (if unlocked)
     if(!derivedKey){
       alert("Vault imported, but no derivedKey => please unlock or re-create your passphrase.");
-      // You might queue the imported data until the user unlocks.
     } else {
-      // Save the newly imported vault
       await promptAndSaveVault();
       console.log("Imported vaultData from file =>", vaultData);
       alert("✅ Vault imported successfully!");
-      // Re-render UI
       populateWalletUI();
       renderTransactionTable();
     }
@@ -1024,13 +1029,11 @@ function initializeUI(){
   let exportBackupBtn=document.getElementById('exportBackupBtn');
   exportBackupBtn?.addEventListener('click', exportVaultBackup);
 
-  // (NEW) Example “Export Friendly” Button
   const exportFriendlyBtn = document.getElementById('exportFriendlyBtn');
   if(exportFriendlyBtn){
     exportFriendlyBtn.addEventListener('click', exportVaultBackupForMobile);
   }
 
-  // (NEW) Example “Import Vault” File Input
   const importVaultFileInput = document.getElementById('importVaultFileInput');
   if(importVaultFileInput){
     importVaultFileInput.addEventListener('change', async (evt)=>{
@@ -1048,8 +1051,11 @@ function initializeUI(){
     });
     let copyBioCatchPopupBtn=document.getElementById('copyBioCatchBtn');
     copyBioCatchPopupBtn?.addEventListener('click', ()=>{
-      let bcNum=document.getElementById('bioCatchNumberText').textContent;
-      navigator.clipboard.writeText(bcNum)
+      let bcTxt=document.getElementById('bioCatchNumberText');
+      if(!bcTxt) return;
+      // (2) Copy the full string from data attribute
+      const fullValue = bcTxt.dataset.fullCatch || bcTxt.textContent;
+      navigator.clipboard.writeText(fullValue)
         .then(()=>alert('✅ Bio‑Catch Number copied!'))
         .catch(err => {
           console.error("Clipboard copy fail =>", err);
@@ -1065,7 +1071,6 @@ function initializeUI(){
 
   enforceSingleVault();
 
-  // userWallet => save or auto-connect
   const saveWalletBtn=document.getElementById('saveWalletBtn');
   saveWalletBtn?.addEventListener('click', async ()=>{
     if(vaultData.userWallet && vaultData.userWallet.length>0){
@@ -1141,7 +1146,6 @@ function promptInstallA2HS() {
 function generateSalt() {
   return crypto.getRandomValues(new Uint8Array(16));
 }
-
 function validateBioIBAN(str) {
   return /^BIO\d+$/.test(str) || /^BONUS\d+$/.test(str);
 }
