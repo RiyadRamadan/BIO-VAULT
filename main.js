@@ -44,14 +44,14 @@ let vaultData = {
   lockoutTimestamp: null,
   joinTimestamp: 0,
   lastTransactionHash: '',
-  credentialId: null,
+  credentialId: null,   // Tied to biometric
   finalChainHash: '',
   dailyCashback: { date:'', usedCount:0 },
   monthlyUsage: { yearMonth:'', usedCount:0 },
   annualBonusUsed: 0,
 
-  userWallet: "", // On-chain wallet address
-  nextBonusId: 1  // Unique ID assigned to each 'cashback' bonus
+  userWallet: "",        // On-chain wallet address (once saved, cannot change)
+  nextBonusId: 1
 };
 
 /******************************
@@ -74,6 +74,7 @@ async function decryptData(key, iv, ciphertext) {
 function bufferToBase64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
+
 function base64ToBuffer(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -526,12 +527,9 @@ async function handleSendTransaction(){
     }
     vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-    // generateBioCatchNumber => below (second block) didn't exist originally,
-    // but the code references it. So we keep it from the second block:
     let plainBio=await generateBioCatchNumber(
       vaultData.bioIBAN, recv, amt, nowSec, vaultData.balanceTVM, vaultData.finalChainHash
     );
-
     // Ensure uniqueness
     for(let tx of vaultData.transactions){
       if(tx.bioCatch){
@@ -568,6 +566,12 @@ async function handleSendTransaction(){
       vaultData.transactions.push(bonusTx);
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
+
+      // (1) AUTO REDEEM IF WALLET IS SET AND BIOMETRIC CREDENTIAL IS PRESENT
+      if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
+        console.log("Auto‑redeeming bonus on chain...");
+        await redeemBonusOnChain(bonusTx);
+      }
     }
     populateWalletUI();
     await promptAndSaveVault();
@@ -657,6 +661,12 @@ async function handleReceiveTransaction(){
       vaultData.transactions.push(bonusTx);
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
+
+      // (1) AUTO REDEEM IF WALLET IS SET AND BIOMETRIC CREDENTIAL IS PRESENT
+      if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
+        console.log("Auto‑redeeming bonus on chain...");
+        await redeemBonusOnChain(bonusTx);
+      }
     }
     await promptAndSaveVault();
     populateWalletUI();
@@ -747,6 +757,14 @@ function populateWalletUI(){
 
   let utcEl=document.getElementById('utcTime');
   if(utcEl) utcEl.textContent=formatDisplayDate(vaultData.lastUTCTimestamp);
+
+  // (2) SHOW THE SAVED WALLET ADDRESS SOMEWHERE (e.g. below IBAN)
+  const userWalletLabel = document.getElementById('userWalletLabel');
+  if(userWalletLabel){
+    userWalletLabel.textContent = vaultData.userWallet 
+      ? `On-chain Wallet: ${vaultData.userWallet}`
+      : '(No wallet set)';
+  }
 }
 
 function showBioCatchPopup(encBio){
@@ -807,12 +825,22 @@ function handleCopyBioIBAN(){
  ******************************/
 async function redeemBonusOnChain(tx){
   console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:", tx);
-  if(!tx||!tx.bonusId){alert("Invalid bonus or missing bonusId");return;}
-  if(!vaultData.userWallet||vaultData.userWallet.length<5){
-    alert("Please set your wallet address first!");
+  if(!tx||!tx.bonusId){
+    alert("Invalid bonus or missing bonusId");
     return;
   }
+  // (4) MAKE SURE userWallet & credentialId are set
+  if(!vaultData.userWallet || vaultData.userWallet.length<5){
+    alert("No valid wallet address found!");
+    return;
+  }
+  if(!vaultData.credentialId){
+    alert("No device key (credentialId) => cannot proceed!");
+    return;
+  }
+
   try{
+    // Must connect to metamask
     if(!window.ethereum){
       alert("No MetaMask or web3 provider found!");
       return;
@@ -827,15 +855,21 @@ async function redeemBonusOnChain(tx){
       alert("Warning: active metamask address != vaultData.userWallet. Proceeding anyway...");
     }
 
-    // Insert real contract calls here, e.g.:
-    // const contractAddr="0xYOUR_CONTRACT_ADDRESS";
-    // const contractABI=[...];
-    // const contract=new ethers.Contract(contractAddr, contractABI, signer);
-    // let txResp=await contract.validateAndMint(vaultData.userWallet, tx.bonusId);
-    // let receipt=await txResp.wait();
-    // console.log("Mint receipt =>", receipt);
-    // alert(`Bonus #${tx.bonusId} minted on chain!`);
-
+    /**
+     * Here, to prove biometric, you'd typically sign something with the device's credential or pass a token from your device's WebAuthn flow.
+     * The smart contract would verify that signature or proof to ensure it's not a bot.
+     * 
+     * Example pseudo-code:
+     *    let webAuthnSignature = doSomeBiometricSignatureFlow();
+     *    let txResp = await contract.mintBonus(
+     *       vaultData.userWallet, 
+     *       tx.bonusId, 
+     *       webAuthnSignature
+     *    );
+     *    let receipt = await txResp.wait();
+     */
+    
+    // (Stub) Show the user that we are "redeeming" on chain:
     alert(`(Stub) Bonus #${tx.bonusId} => minted to ${vaultData.userWallet}. Fill in real calls!`);
   } catch(err){
     console.error("redeemBonusOnChain => error:",err);
@@ -975,19 +1009,32 @@ function initializeUI(){
 
   enforceSingleVault();
 
-  // userWallet => save or auto-connect
+  // (2) Once the user sets their wallet address, DO NOT let them change it
   const saveWalletBtn=document.getElementById('saveWalletBtn');
   saveWalletBtn?.addEventListener('click', async ()=>{
+    // If wallet is already set, disallow changes:
+    if(vaultData.userWallet && vaultData.userWallet.length>0){
+      alert("Wallet address is already set and cannot be changed.");
+      return;
+    }
     const addr=document.getElementById('userWalletAddress').value.trim();
     if(!addr.startsWith('0x')||addr.length<10){
       alert("Invalid wallet address");
       return;
     }
     vaultData.userWallet=addr;
+
+    // Immediately store the new wallet + device key
     await promptAndSaveVault();
-    alert("Wallet address saved to vaultData.");
+
+    // Clear the input and re-render:
+    document.getElementById('userWalletAddress').value = "";
+    populateWalletUI();
+
+    alert("✅ Wallet address saved to vaultData. It cannot be changed.");
   });
 
+  // (3) Connect to MetaMask => functional
   const autoConnectWalletBtn=document.getElementById('autoConnectWalletBtn');
   autoConnectWalletBtn?.addEventListener('click', async ()=>{
     if(!window.ethereum){
@@ -999,10 +1046,18 @@ function initializeUI(){
       const provider=new ethers.providers.Web3Provider(window.ethereum);
       const signer=provider.getSigner();
       const userAddr=await signer.getAddress();
-      document.getElementById('userWalletAddress').value=userAddr;
-      vaultData.userWallet=userAddr;
-      await promptAndSaveVault();
-      alert(`Auto-connected => ${userAddr}`);
+
+      // If userWallet is not yet set, we set it. If it is set, warn them
+      if(!vaultData.userWallet){
+        vaultData.userWallet=userAddr;
+        await promptAndSaveVault();
+        populateWalletUI();
+        alert(`Auto-connected => ${userAddr}`);
+      } else if(vaultData.userWallet.toLowerCase()!==userAddr.toLowerCase()){
+        alert("Warning: The vault already has a different wallet address set!");
+      } else {
+        alert(`Your current vault address matches the connected MetaMask account: ${userAddr}`);
+      }
     } catch(err){
       console.error("AutoConnect error =>", err);
       alert("Failed to connect wallet => see console");
@@ -1033,13 +1088,11 @@ function promptInstallA2HS() {
 }
 
 /******************************
- * Additional Helpers (from second block)
+ * Additional Helpers
  ******************************/
 function generateSalt() {
   return crypto.getRandomValues(new Uint8Array(16));
 }
-
-// For “senderVaultSnapshot” checks, etc.
 function validateBioIBAN(str) {
   return /^BIO\d+$/.test(str) || /^BONUS\d+$/.test(str);
 }
@@ -1053,7 +1106,7 @@ async function validateSenderVaultSnapshot(senderVaultSnapshot, claimedSenderIBA
 }
 
 /******************************
- * Snapshot Serialization & Validation (from second block)
+ * Snapshot Serialization & Validation
  ******************************/
 function serializeVaultSnapshotForBioCatch(vData) {
   const fieldSep = '|';
