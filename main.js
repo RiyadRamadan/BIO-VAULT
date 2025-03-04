@@ -74,7 +74,6 @@ async function decryptData(key, iv, ciphertext) {
 function bufferToBase64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
-
 function base64ToBuffer(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -567,7 +566,7 @@ async function handleSendTransaction(){
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // Auto‑redeem if wallet is set and biometric credential is present
+      // Auto‑redeem if wallet & credential are present
       if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
@@ -662,7 +661,7 @@ async function handleReceiveTransaction(){
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // Auto‑redeem if wallet is set and biometric credential is present
+      // Auto‑redeem if wallet & credential are present
       if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
@@ -774,83 +773,6 @@ function showBioCatchPopup(encBio){
   if(bcTxt) bcTxt.textContent=encBio;
 }
 
-/******************************
- * NEW: More user-friendly Export + Import
- ******************************/
-/**
- * Generates a custom `.biovault` file with a short header
- * plus base64-encoded JSON. This way, the user sees a single
- * “BioVault” file extension instead of raw JSON.
- */
-function exportVaultBackup(){
-  // We'll store the actual vaultData as a normal JSON string:
-  const rawJson = JSON.stringify(vaultData, null, 2);
-
-  // Then produce a small header + base64 => minimal obfuscation
-  // E.g. "BioVaultBackup:v1:" + base64
-  const header = "BioVaultBackup:v1:";
-  const encoded = btoa(rawJson);
-  const fileContents = header + encoded;
-
-  // Save as .biovault extension
-  const blob=new Blob([fileContents], {type:'text/plain'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;
-  a.download='myVault.biovault';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-
-  alert("✅ Your vault was exported as a .biovault file!");
-}
-
-/**
- * Let the user pick a .biovault file from their device. Then we parse
- * it back into raw JSON, re-load the vaultData from that file, and
- * persist to IDB.
- */
-async function importVaultBackup(file){
-  if(!file){
-    alert("No file selected for import!");
-    return;
-  }
-  const text = await file.text();
-  if(!text.startsWith("BioVaultBackup:v1:")){
-    alert("Invalid file format: missing header!");
-    return;
-  }
-  const encoded = text.replace("BioVaultBackup:v1:", "").trim();
-  try{
-    const rawJson = atob(encoded);
-    const data = JSON.parse(rawJson);
-    // Overwrite current vaultData
-    Object.assign(vaultData, data);
-    alert("✅ Vault data imported successfully. Now saving...");
-    await promptAndSaveVault();
-    // We'll refresh UI (but user still needs to re-unlock if needed).
-    populateWalletUI();
-    renderTransactionTable();
-  } catch(err){
-    console.error("Import vault error =>", err);
-    alert("Failed to parse the .biovault file. See console for details.");
-  }
-}
-
-/**
- * For convenience: a helper so you can attach to an <input type='file'>
- * or do something like document.getElementById('importFileInput').files[0].
- */
-function handleImportVaultFileSelection(){
-  const input = document.getElementById('importVaultFileInput');
-  if(!input || !input.files || !input.files[0]){
-    alert("No file was selected");
-    return;
-  }
-  importVaultBackup(input.files[0]);
-}
-
 function exportTransactionTable(){
   let table=document.getElementById('transactionTable');
   if(!table){alert("No table found");return;}
@@ -875,6 +797,86 @@ function exportTransactionTable(){
   document.body.removeChild(link);
 }
 
+function exportVaultBackup(){
+  let data=JSON.stringify(vaultData,null,2);
+  let blob=new Blob([data], {type:'application/json'});
+  let url=URL.createObjectURL(blob);
+  let a=document.createElement('a');
+  a.href=url;
+  a.download='vault_backup.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/************************************************************************
+ * (NEW) USER-FRIENDLY BACKUP: For Mobile, with a .vault extension
+ ************************************************************************/
+function exportVaultBackupForMobile(){
+  /**
+   * We still store the same JSON internally, but we use a custom extension
+   * so users won't see "just JSON." They get "myVault.vault" or similar.
+   */
+  const backupObj = vaultData;
+  // Convert it to string
+  const textData = JSON.stringify(backupObj);
+  // Optionally, you could do some minimal encryption, but let's keep it simple:
+  const blob = new Blob([textData], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  // The extension .vault signals to the user (and possibly your PWA) that 
+  // this is a "special" file. 
+  a.download = 'myBioVault.vault';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  alert("Vault exported as 'myBioVault.vault'. On mobile, you can re-import this file to restore.");
+}
+
+/************************************************************************
+ * (NEW) IMPORT a .vault file: Let user pick it, then restore vaultData
+ ************************************************************************/
+async function importVaultBackupFromFile(file){
+  try {
+    // Read the file as text
+    const text = await file.text();
+    // Attempt to parse as JSON
+    const parsed = JSON.parse(text);
+
+    // Merge or overwrite existing vaultData, 
+    // but the safest approach is to do a straightforward replacement:
+    vaultData = parsed;
+
+    // Re-persist into IDB using the existing derivedKey (if unlocked)
+    if(!derivedKey){
+      alert("Vault imported, but no derivedKey => please unlock or re-create your passphrase.");
+      // You might queue the imported data until the user unlocks.
+    } else {
+      // Save the newly imported vault
+      await promptAndSaveVault();
+      console.log("Imported vaultData from file =>", vaultData);
+      alert("✅ Vault imported successfully!");
+      // Re-render UI
+      populateWalletUI();
+      renderTransactionTable();
+    }
+  } catch(err){
+    console.error("Failed to import .vault file =>", err);
+    alert("❌ Invalid or corrupted .vault file");
+  }
+}
+
+function handleCopyBioIBAN(){
+  let ibInp=document.getElementById('bioibanInput');
+  if(!ibInp||!ibInp.value.trim()){alert("No Bio-IBAN to copy");return;}
+  navigator.clipboard.writeText(ibInp.value.trim())
+    .then(()=>alert("Bio-IBAN copied!"))
+    .catch(err=>{console.error("Clipboard fail:",err);alert("Failed to copy IBAN")});
+}
 
 /******************************
  * On-Chain Stub for Bonus
@@ -893,7 +895,6 @@ async function redeemBonusOnChain(tx){
     alert("No device key (credentialId) => cannot proceed!");
     return;
   }
-
   try{
     if(!window.ethereum){
       alert("No MetaMask or web3 provider found!");
@@ -908,14 +909,6 @@ async function redeemBonusOnChain(tx){
     if(userAddr.toLowerCase()!==vaultData.userWallet.toLowerCase()){
       alert("Warning: active metamask address != vaultData.userWallet. Proceeding anyway...");
     }
-
-    // Insert real contract calls here, e.g.:
-    // const contractAddr="0xYOUR_CONTRACT_ADDRESS";
-    // const contractABI=[...];
-    // const contract=new ethers.Contract(contractAddr, contractABI, signer);
-    // let txResp=await contract.validateAndMint(vaultData.userWallet, tx.bonusId);
-    // let receipt=await txResp.wait();
-    // alert(`Bonus #${tx.bonusId} minted on chain!`);
 
     alert(`(Stub) Bonus #${tx.bonusId} => minted to ${vaultData.userWallet}. Fill in real calls!`);
   } catch(err){
@@ -1028,16 +1021,22 @@ function initializeUI(){
   let exportBtn=document.getElementById('exportBtn');
   exportBtn?.addEventListener('click', exportTransactionTable);
 
-  // (1) Overwrite the previous export to produce a .biovault file
   let exportBackupBtn=document.getElementById('exportBackupBtn');
   exportBackupBtn?.addEventListener('click', exportVaultBackup);
 
-  // (2) A new input for importing a .biovault file
-  let importVaultFileInput=document.getElementById('importVaultFileInput');
+  // (NEW) Example “Export Friendly” Button
+  const exportFriendlyBtn = document.getElementById('exportFriendlyBtn');
+  if(exportFriendlyBtn){
+    exportFriendlyBtn.addEventListener('click', exportVaultBackupForMobile);
+  }
+
+  // (NEW) Example “Import Vault” File Input
+  const importVaultFileInput = document.getElementById('importVaultFileInput');
   if(importVaultFileInput){
-    importVaultFileInput.addEventListener('change', ()=>{
-      handleImportVaultFileSelection();
-      importVaultFileInput.value = ''; // reset
+    importVaultFileInput.addEventListener('change', async (evt)=>{
+      if(evt.target.files && evt.target.files[0]){
+        await importVaultBackupFromFile(evt.target.files[0]);
+      }
     });
   }
 
@@ -1066,6 +1065,7 @@ function initializeUI(){
 
   enforceSingleVault();
 
+  // userWallet => save or auto-connect
   const saveWalletBtn=document.getElementById('saveWalletBtn');
   saveWalletBtn?.addEventListener('click', async ()=>{
     if(vaultData.userWallet && vaultData.userWallet.length>0){
@@ -1079,7 +1079,7 @@ function initializeUI(){
     }
     vaultData.userWallet=addr;
     await promptAndSaveVault();
-    document.getElementById('userWalletAddress').value = "";
+    document.getElementById('userWalletAddress').value="";
     populateWalletUI();
     alert("✅ Wallet address saved to vaultData. It cannot be changed.");
   });
@@ -1141,6 +1141,7 @@ function promptInstallA2HS() {
 function generateSalt() {
   return crypto.getRandomValues(new Uint8Array(16));
 }
+
 function validateBioIBAN(str) {
   return /^BIO\d+$/.test(str) || /^BONUS\d+$/.test(str);
 }
