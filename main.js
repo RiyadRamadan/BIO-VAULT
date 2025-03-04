@@ -74,7 +74,6 @@ async function decryptData(key, iv, ciphertext) {
 function bufferToBase64(buf) {
   return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
-
 function base64ToBuffer(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
@@ -567,7 +566,7 @@ async function handleSendTransaction(){
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // (1) AUTO REDEEM IF WALLET IS SET AND BIOMETRIC CREDENTIAL IS PRESENT
+      // Auto‑redeem if wallet & credential are present
       if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
@@ -662,7 +661,7 @@ async function handleReceiveTransaction(){
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // (1) AUTO REDEEM IF WALLET IS SET AND BIOMETRIC CREDENTIAL IS PRESENT
+      // Auto‑redeem if wallet & credential are present
       if (vaultData.userWallet && vaultData.userWallet.length > 0 && vaultData.credentialId) {
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
@@ -758,7 +757,6 @@ function populateWalletUI(){
   let utcEl=document.getElementById('utcTime');
   if(utcEl) utcEl.textContent=formatDisplayDate(vaultData.lastUTCTimestamp);
 
-  // (2) SHOW THE SAVED WALLET ADDRESS SOMEWHERE (e.g. below IBAN)
   const userWalletLabel = document.getElementById('userWalletLabel');
   if(userWalletLabel){
     userWalletLabel.textContent = vaultData.userWallet 
@@ -812,6 +810,66 @@ function exportVaultBackup(){
   URL.revokeObjectURL(url);
 }
 
+/************************************************************************
+ * (NEW) USER-FRIENDLY BACKUP: For Mobile, with a .vault extension
+ ************************************************************************/
+function exportVaultBackupForMobile(){
+  /**
+   * We still store the same JSON internally, but we use a custom extension
+   * so users won't see "just JSON." They get "myVault.vault" or similar.
+   */
+  const backupObj = vaultData;
+  // Convert it to string
+  const textData = JSON.stringify(backupObj);
+  // Optionally, you could do some minimal encryption, but let's keep it simple:
+  const blob = new Blob([textData], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  // The extension .vault signals to the user (and possibly your PWA) that 
+  // this is a "special" file. 
+  a.download = 'myBioVault.vault';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  alert("Vault exported as 'myBioVault.vault'. On mobile, you can re-import this file to restore.");
+}
+
+/************************************************************************
+ * (NEW) IMPORT a .vault file: Let user pick it, then restore vaultData
+ ************************************************************************/
+async function importVaultBackupFromFile(file){
+  try {
+    // Read the file as text
+    const text = await file.text();
+    // Attempt to parse as JSON
+    const parsed = JSON.parse(text);
+
+    // Merge or overwrite existing vaultData, 
+    // but the safest approach is to do a straightforward replacement:
+    vaultData = parsed;
+
+    // Re-persist into IDB using the existing derivedKey (if unlocked)
+    if(!derivedKey){
+      alert("Vault imported, but no derivedKey => please unlock or re-create your passphrase.");
+      // You might queue the imported data until the user unlocks.
+    } else {
+      // Save the newly imported vault
+      await promptAndSaveVault();
+      console.log("Imported vaultData from file =>", vaultData);
+      alert("✅ Vault imported successfully!");
+      // Re-render UI
+      populateWalletUI();
+      renderTransactionTable();
+    }
+  } catch(err){
+    console.error("Failed to import .vault file =>", err);
+    alert("❌ Invalid or corrupted .vault file");
+  }
+}
+
 function handleCopyBioIBAN(){
   let ibInp=document.getElementById('bioibanInput');
   if(!ibInp||!ibInp.value.trim()){alert("No Bio-IBAN to copy");return;}
@@ -829,7 +887,6 @@ async function redeemBonusOnChain(tx){
     alert("Invalid bonus or missing bonusId");
     return;
   }
-  // (4) MAKE SURE userWallet & credentialId are set
   if(!vaultData.userWallet || vaultData.userWallet.length<5){
     alert("No valid wallet address found!");
     return;
@@ -838,9 +895,7 @@ async function redeemBonusOnChain(tx){
     alert("No device key (credentialId) => cannot proceed!");
     return;
   }
-
   try{
-    // Must connect to metamask
     if(!window.ethereum){
       alert("No MetaMask or web3 provider found!");
       return;
@@ -855,21 +910,6 @@ async function redeemBonusOnChain(tx){
       alert("Warning: active metamask address != vaultData.userWallet. Proceeding anyway...");
     }
 
-    /**
-     * Here, to prove biometric, you'd typically sign something with the device's credential or pass a token from your device's WebAuthn flow.
-     * The smart contract would verify that signature or proof to ensure it's not a bot.
-     * 
-     * Example pseudo-code:
-     *    let webAuthnSignature = doSomeBiometricSignatureFlow();
-     *    let txResp = await contract.mintBonus(
-     *       vaultData.userWallet, 
-     *       tx.bonusId, 
-     *       webAuthnSignature
-     *    );
-     *    let receipt = await txResp.wait();
-     */
-    
-    // (Stub) Show the user that we are "redeeming" on chain:
     alert(`(Stub) Bonus #${tx.bonusId} => minted to ${vaultData.userWallet}. Fill in real calls!`);
   } catch(err){
     console.error("redeemBonusOnChain => error:",err);
@@ -984,6 +1024,22 @@ function initializeUI(){
   let exportBackupBtn=document.getElementById('exportBackupBtn');
   exportBackupBtn?.addEventListener('click', exportVaultBackup);
 
+  // (NEW) Example “Export Friendly” Button
+  const exportFriendlyBtn = document.getElementById('exportFriendlyBtn');
+  if(exportFriendlyBtn){
+    exportFriendlyBtn.addEventListener('click', exportVaultBackupForMobile);
+  }
+
+  // (NEW) Example “Import Vault” File Input
+  const importVaultFileInput = document.getElementById('importVaultFileInput');
+  if(importVaultFileInput){
+    importVaultFileInput.addEventListener('change', async (evt)=>{
+      if(evt.target.files && evt.target.files[0]){
+        await importVaultBackupFromFile(evt.target.files[0]);
+      }
+    });
+  }
+
   let bioCatchPopup=document.getElementById('bioCatchPopup');
   if(bioCatchPopup){
     let closeBioCatchPopupBtn=document.getElementById('closeBioCatchPopup');
@@ -1009,10 +1065,9 @@ function initializeUI(){
 
   enforceSingleVault();
 
-  // (2) Once the user sets their wallet address, DO NOT let them change it
+  // userWallet => save or auto-connect
   const saveWalletBtn=document.getElementById('saveWalletBtn');
   saveWalletBtn?.addEventListener('click', async ()=>{
-    // If wallet is already set, disallow changes:
     if(vaultData.userWallet && vaultData.userWallet.length>0){
       alert("Wallet address is already set and cannot be changed.");
       return;
@@ -1023,18 +1078,12 @@ function initializeUI(){
       return;
     }
     vaultData.userWallet=addr;
-
-    // Immediately store the new wallet + device key
     await promptAndSaveVault();
-
-    // Clear the input and re-render:
-    document.getElementById('userWalletAddress').value = "";
+    document.getElementById('userWalletAddress').value="";
     populateWalletUI();
-
     alert("✅ Wallet address saved to vaultData. It cannot be changed.");
   });
 
-  // (3) Connect to MetaMask => functional
   const autoConnectWalletBtn=document.getElementById('autoConnectWalletBtn');
   autoConnectWalletBtn?.addEventListener('click', async ()=>{
     if(!window.ethereum){
@@ -1047,7 +1096,6 @@ function initializeUI(){
       const signer=provider.getSigner();
       const userAddr=await signer.getAddress();
 
-      // If userWallet is not yet set, we set it. If it is set, warn them
       if(!vaultData.userWallet){
         vaultData.userWallet=userAddr;
         await promptAndSaveVault();
@@ -1093,6 +1141,7 @@ function promptInstallA2HS() {
 function generateSalt() {
   return crypto.getRandomValues(new Uint8Array(16));
 }
+
 function validateBioIBAN(str) {
   return /^BIO\d+$/.test(str) || /^BONUS\d+$/.test(str);
 }
