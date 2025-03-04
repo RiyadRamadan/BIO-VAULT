@@ -63,13 +63,13 @@ async function encryptData(key, dataObj) {
   const enc = new TextEncoder();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = enc.encode(JSON.stringify(dataObj));
-  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plaintext);
   return { iv, ciphertext };
 }
 
 async function decryptData(key, iv, ciphertext) {
   const dec = new TextDecoder();
-  const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+  const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ciphertext);
   return JSON.parse(dec.decode(plainBuf));
 }
 
@@ -80,7 +80,7 @@ function bufferToBase64(buf) {
 function base64ToBuffer(b64) {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
-  for (let i=0; i<bin.length; i++) {
+  for (let i=0; i<bin.length; i++){
     out[i] = bin.charCodeAt(i);
   }
   return out;
@@ -91,8 +91,8 @@ async function openVaultDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = evt => {
       const db = evt.target.result;
-      if (!db.objectStoreNames.contains(VAULT_STORE)) {
-        db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+      if(!db.objectStoreNames.contains(VAULT_STORE)){
+        db.createObjectStore(VAULT_STORE, { keyPath:'id' });
       }
     };
     req.onsuccess = evt => resolve(evt.target.result);
@@ -103,7 +103,7 @@ async function openVaultDB() {
 async function saveVaultDataToDB(iv, ciphertext, saltBase64) {
   const db = await openVaultDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([VAULT_STORE], 'readwrite');
+    const tx = db.transaction([VAULT_STORE],'readwrite');
     const store = tx.objectStore(VAULT_STORE);
     store.put({
       id: 'vaultData',
@@ -121,21 +121,23 @@ async function saveVaultDataToDB(iv, ciphertext, saltBase64) {
 async function loadVaultDataFromDB() {
   const db = await openVaultDB();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction([VAULT_STORE], 'readonly');
+    const tx = db.transaction([VAULT_STORE],'readonly');
     const store = tx.objectStore(VAULT_STORE);
     const getReq = store.get('vaultData');
     getReq.onsuccess = () => {
-      if (getReq.result) {
-        try {
+      if(getReq.result){
+        try{
           const iv = base64ToBuffer(getReq.result.iv);
           const ciph = base64ToBuffer(getReq.result.ciphertext);
           const s = getReq.result.salt ? base64ToBuffer(getReq.result.salt) : null;
           resolve({
-            iv, ciphertext: ciph, salt: s,
+            iv,
+            ciphertext: ciph,
+            salt: s,
             lockoutTimestamp: getReq.result.lockoutTimestamp || null,
             authAttempts: getReq.result.authAttempts || 0
           });
-        } catch(err) {
+        } catch(err){
           console.error("Error decoding stored data =>", err);
           resolve(null);
         }
@@ -150,28 +152,25 @@ async function loadVaultDataFromDB() {
 /******************************
  * Key Derivation & Vault Logic
  ******************************/
-async function deriveKeyFromPIN(pin, salt) {
+async function deriveKeyFromPIN(pin, salt){
   const enc = new TextEncoder();
   const pinBytes = enc.encode(pin);
-  const keyMaterial = await crypto.subtle.importKey('raw', pinBytes, { name: 'PBKDF2' }, false, ['deriveKey']);
+  const keyMaterial = await crypto.subtle.importKey('raw', pinBytes, { name:'PBKDF2' }, false, ['deriveKey']);
   return crypto.subtle.deriveKey({
-    name: 'PBKDF2',
-    salt,
-    iterations: 100000,
-    hash: 'SHA-256'
-  }, keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+    name:'PBKDF2', salt, iterations:100000, hash:'SHA-256'
+  }, keyMaterial, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
 }
 
-async function promptAndSaveVault(salt=null) {
-  try {
-    if (!derivedKey) throw new Error("No derivedKey");
+async function promptAndSaveVault(salt=null){
+  try{
+    if(!derivedKey) throw new Error("No derivedKey");
     const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
     let saltBase64;
-    if (salt) {
+    if(salt){
       saltBase64 = bufferToBase64(salt);
     } else {
       const stored = await loadVaultDataFromDB();
-      if (stored && stored.salt) {
+      if(stored && stored.salt){
         saltBase64 = bufferToBase64(stored.salt);
       } else {
         throw new Error("Salt not found => cannot persist");
@@ -187,17 +186,17 @@ async function promptAndSaveVault(salt=null) {
       timestamp: Date.now()
     };
     localStorage.setItem(VAULT_BACKUP_KEY, JSON.stringify(backupPayload));
-    vaultSyncChannel.postMessage({ type: 'vaultUpdate', payload: backupPayload });
+    vaultSyncChannel.postMessage({ type:'vaultUpdate', payload: backupPayload });
     console.log("Vault data stored => triple redundancy done");
-  } catch(err) {
+  } catch(err){
     console.error("Vault persist failed:", err);
     alert("CRITICAL: VAULT BACKUP FAILED! EXPORT IMMEDIATELY!");
   }
 }
 
-function lockVault() {
-  if (!vaultUnlocked) return;
-  vaultUnlocked = false;
+function lockVault(){
+  if(!vaultUnlocked)return;
+  vaultUnlocked=false;
   document.getElementById('vaultUI')?.classList.add('hidden');
   document.getElementById('lockVaultBtn')?.classList.add('hidden');
   document.getElementById('lockedScreen')?.classList.remove('hidden');
@@ -209,50 +208,49 @@ function lockVault() {
  * Biometric Auth
  ******************************/
 async function performBiometricAuthenticationForCreation(){
-  try {
+  try{
     const publicKey = {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: "Bio-Vault" },
+      rp: { name:"Bio-Vault" },
       user: {
         id: crypto.getRandomValues(new Uint8Array(16)),
-        name: "bio-user",
-        displayName: "Bio User"
+        name:"bio-user",
+        displayName:"Bio User"
       },
-      pubKeyCredParams: [
-        { type:"public-key", alg:-7 },
-        { type:"public-key", alg:-257 }
+      pubKeyCredParams:[
+        {type:"public-key", alg:-7},
+        {type:"public-key", alg:-257}
       ],
-      authenticatorSelection: {
-        authenticatorAttachment: "platform",
-        userVerification: "required"
+      authenticatorSelection:{
+        authenticatorAttachment:"platform",
+        userVerification:"required"
       },
-      timeout: 60000,
-      attestation: "none"
+      timeout:60000,
+      attestation:"none"
     };
-    const credential = await navigator.credentials.create({ publicKey });
-    if(!credential) {
+    const credential=await navigator.credentials.create({ publicKey });
+    if(!credential){
       console.error("Biometric creation => null");
       return null;
     }
     return credential;
-  } catch(err) {
+  } catch(err){
     console.error("Biometric creation error:", err);
     return null;
   }
 }
-
 async function performBiometricAssertion(credentialId){
-  try {
+  try{
     const publicKey = {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{ id: base64ToBuffer(credentialId), type:'public-key' }],
-      userVerification: "required",
-      timeout: 60000
+      allowCredentials:[{id: base64ToBuffer(credentialId), type:'public-key'}],
+      userVerification:"required",
+      timeout:60000
     };
-    const assertion = await navigator.credentials.get({ publicKey });
+    const assertion=await navigator.credentials.get({ publicKey });
     return !!assertion;
-  } catch(err) {
-    console.error("Biometric assertion error:", err);
+  } catch(err){
+    console.error("Biometric assertion error:",err);
     return false;
   }
 }
@@ -264,9 +262,9 @@ async function encryptBioCatchNumber(plainText){
   return btoa(plainText);
 }
 async function decryptBioCatchNumber(encStr){
-  try {
+  try{
     return atob(encStr);
-  } catch(e) {
+  }catch(e){
     return null;
   }
 }
@@ -275,49 +273,49 @@ async function decryptBioCatchNumber(encStr){
  * Passphrase Modal
  ******************************/
 async function getPassphraseFromModal({ confirmNeeded=false, modalTitle='Enter Passphrase'}) {
-  return new Promise(resolve => {
-    const passModal = document.getElementById('passModal');
-    const passTitle = document.getElementById('passModalTitle');
-    const passInput = document.getElementById('passModalInput');
-    const passConfirmLabel = document.getElementById('passModalConfirmLabel');
-    const passConfirmInput = document.getElementById('passModalConfirmInput');
-    const passCancelBtn = document.getElementById('passModalCancelBtn');
-    const passSaveBtn = document.getElementById('passModalSaveBtn');
+  return new Promise(resolve=>{
+    const passModal=document.getElementById('passModal');
+    const passTitle=document.getElementById('passModalTitle');
+    const passInput=document.getElementById('passModalInput');
+    const passConfirmLabel=document.getElementById('passModalConfirmLabel');
+    const passConfirmInput=document.getElementById('passModalConfirmInput');
+    const passCancelBtn=document.getElementById('passModalCancelBtn');
+    const passSaveBtn=document.getElementById('passModalSaveBtn');
 
-    passTitle.textContent = modalTitle;
-    passInput.value = '';
-    passConfirmInput.value = '';
-    passConfirmLabel.style.display = confirmNeeded ? 'block' : 'none';
-    passConfirmInput.style.display = confirmNeeded ? 'block' : 'none';
+    passTitle.textContent=modalTitle;
+    passInput.value='';
+    passConfirmInput.value='';
+    passConfirmLabel.style.display=confirmNeeded?'block':'none';
+    passConfirmInput.style.display=confirmNeeded?'block':'none';
 
     function cleanup(){
       passCancelBtn.removeEventListener('click', onCancel);
       passSaveBtn.removeEventListener('click', onSave);
-      passModal.style.display = 'none';
+      passModal.style.display='none';
     }
     function onCancel(){
       cleanup();
-      resolve({ pin:null });
+      resolve({pin:null});
     }
     function onSave(){
-      const pVal = passInput.value.trim();
-      if(!pVal || pVal.length<8){
+      const pVal=passInput.value.trim();
+      if(!pVal||pVal.length<8){
         alert("Pass >= 8 chars");
         return;
       }
       if(confirmNeeded){
-        const cVal = passConfirmInput.value.trim();
-        if(pVal !== cVal){
+        const cVal=passConfirmInput.value.trim();
+        if(pVal!==cVal){
           alert("Mismatch passphrase");
           return;
         }
       }
       cleanup();
-      resolve({ pin:pVal, confirmed:true });
+      resolve({pin:pVal, confirmed:true});
     }
     passCancelBtn.addEventListener('click', onCancel);
     passSaveBtn.addEventListener('click', onSave);
-    passModal.style.display = 'block';
+    passModal.style.display='block';
   });
 }
 
@@ -326,46 +324,46 @@ async function getPassphraseFromModal({ confirmNeeded=false, modalTitle='Enter P
  ******************************/
 async function createNewVault(pinFromUser=null){
   if(!pinFromUser){
-    const res = await getPassphraseFromModal({
+    const res=await getPassphraseFromModal({
       confirmNeeded:true,
       modalTitle:'Create New Vault (Set Passphrase)'
     });
-    pinFromUser = res.pin;
+    pinFromUser=res.pin;
   }
-  if(!pinFromUser || pinFromUser.length<8){
+  if(!pinFromUser||pinFromUser.length<8){
     alert("Pass must be >=8 chars");
     return;
   }
   console.log("Creating new vault => no existing one found");
 
   localStorage.setItem('vaultLock','locked');
-  const nowSec = Math.floor(Date.now()/1000);
-  vaultData.joinTimestamp = nowSec;
-  vaultData.lastUTCTimestamp = nowSec;
-  vaultData.initialBioConstant = INITIAL_BIO_CONSTANT;
-  vaultData.bonusConstant = vaultData.joinTimestamp - vaultData.initialBioConstant;
-  vaultData.bioIBAN = `BIO${vaultData.initialBioConstant + vaultData.joinTimestamp}`;
-  vaultData.balanceTVM = INITIAL_BALANCE_TVM;
-  vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
-  vaultData.transactions = [];
-  vaultData.authAttempts = 0;
-  vaultData.lockoutTimestamp = null;
-  vaultData.lastTransactionHash = '';
-  vaultData.finalChainHash = '';
+  const nowSec=Math.floor(Date.now()/1000);
+  vaultData.joinTimestamp=nowSec;
+  vaultData.lastUTCTimestamp=nowSec;
+  vaultData.initialBioConstant=INITIAL_BIO_CONSTANT;
+  vaultData.bonusConstant=vaultData.joinTimestamp - vaultData.initialBioConstant;
+  vaultData.bioIBAN=`BIO${vaultData.initialBioConstant + vaultData.joinTimestamp}`;
+  vaultData.balanceTVM=INITIAL_BALANCE_TVM;
+  vaultData.balanceUSD=parseFloat((vaultData.balanceTVM/EXCHANGE_RATE).toFixed(2));
+  vaultData.transactions=[];
+  vaultData.authAttempts=0;
+  vaultData.lockoutTimestamp=null;
+  vaultData.lastTransactionHash='';
+  vaultData.finalChainHash='';
 
-  const cred = await performBiometricAuthenticationForCreation();
-  if(!cred || !cred.id){
+  const cred=await performBiometricAuthenticationForCreation();
+  if(!cred||!cred.id){
     alert("Biometric creation failed => vault cannot be created");
     return;
   }
-  vaultData.credentialId = bufferToBase64(cred.rawId);
+  vaultData.credentialId=bufferToBase64(cred.rawId);
 
   console.log("🆕 Vault data =>", vaultData);
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  derivedKey = await deriveKeyFromPIN(pinFromUser, salt);
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  derivedKey=await deriveKeyFromPIN(pinFromUser, salt);
   await promptAndSaveVault(salt);
 
-  vaultUnlocked = true;
+  vaultUnlocked=true;
   showVaultUI();
   initializeBioConstantAndUTCTime();
   localStorage.setItem('vaultUnlocked','true');
@@ -373,19 +371,19 @@ async function createNewVault(pinFromUser=null){
 
 async function unlockVault(){
   if(vaultData.lockoutTimestamp){
-    const now = Math.floor(Date.now()/1000);
-    if(now < vaultData.lockoutTimestamp){
-      const remain = vaultData.lockoutTimestamp - now;
+    const now=Math.floor(Date.now()/1000);
+    if(now<vaultData.lockoutTimestamp){
+      const remain=vaultData.lockoutTimestamp-now;
       alert(`Vault locked => wait ${Math.ceil(remain/60)} min`);
       return;
-    } else {
-      vaultData.lockoutTimestamp = null;
-      vaultData.authAttempts = 0;
+    }else{
+      vaultData.lockoutTimestamp=null;
+      vaultData.authAttempts=0;
       await promptAndSaveVault();
     }
   }
 
-  const { pin } = await getPassphraseFromModal({
+  const { pin }=await getPassphraseFromModal({
     confirmNeeded:false,
     modalTitle:'Unlock Vault'
   });
@@ -400,63 +398,63 @@ async function unlockVault(){
     return;
   }
 
-  const stored = await loadVaultDataFromDB();
+  const stored=await loadVaultDataFromDB();
   if(!stored){
     if(!confirm("No vault => create new?"))return;
     await createNewVault(pin);
     return;
   }
-  try {
+  try{
     if(!stored.salt) throw new Error("No salt in data");
-    derivedKey = await deriveKeyFromPIN(pin, stored.salt);
-    const dec = await decryptData(derivedKey, stored.iv, stored.ciphertext);
-    vaultData = dec;
+    derivedKey=await deriveKeyFromPIN(pin, stored.salt);
+    const dec=await decryptData(derivedKey, stored.iv, stored.ciphertext);
+    vaultData=dec;
 
-    vaultData.lockoutTimestamp = stored.lockoutTimestamp;
-    vaultData.authAttempts = stored.authAttempts;
+    vaultData.lockoutTimestamp=stored.lockoutTimestamp;
+    vaultData.authAttempts=stored.authAttempts;
 
     if(vaultData.credentialId){
-      const ok = await performBiometricAssertion(vaultData.credentialId);
+      const ok=await performBiometricAssertion(vaultData.credentialId);
       if(!ok){
         alert("Device credential mismatch => fail");
         handleFailedAuthAttempt();
         return;
       }
     }
-    vaultUnlocked = true;
-    vaultData.authAttempts = 0;
-    vaultData.lockoutTimestamp = null;
+    vaultUnlocked=true;
+    vaultData.authAttempts=0;
+    vaultData.lockoutTimestamp=null;
     await promptAndSaveVault();
     showVaultUI();
     initializeBioConstantAndUTCTime();
     localStorage.setItem('vaultUnlocked','true');
-  } catch(err){
-    alert("Failed decrypt => "+err.message);
-    console.error("Unlock error =>", err);
+  }catch(err){
+    alert("Failed decrypt =>"+err.message);
+    console.error("Unlock error =>",err);
     handleFailedAuthAttempt();
   }
 }
 
 async function checkAndUnlockVault(){
-  const stored = await loadVaultDataFromDB();
+  const stored=await loadVaultDataFromDB();
   if(!stored){
     if(!confirm("No vault => create new?"))return;
-    const { pin } = await getPassphraseFromModal({
+    const { pin }=await getPassphraseFromModal({
       confirmNeeded:true,
       modalTitle:'Create New Vault (Set Passphrase)'
     });
     await createNewVault(pin);
-  } else {
+  }else{
     await unlockVault();
   }
 }
 
 async function handleFailedAuthAttempt(){
-  vaultData.authAttempts = (vaultData.authAttempts||0) + 1;
-  if(vaultData.authAttempts >= MAX_AUTH_ATTEMPTS){
-    vaultData.lockoutTimestamp = Math.floor(Date.now()/1000) + LOCKOUT_DURATION_SECONDS;
+  vaultData.authAttempts=(vaultData.authAttempts||0)+1;
+  if(vaultData.authAttempts>=MAX_AUTH_ATTEMPTS){
+    vaultData.lockoutTimestamp=Math.floor(Date.now()/1000)+LOCKOUT_DURATION_SECONDS;
     alert("❌ Max attempts => locked 1hr");
-  } else {
+  }else{
     alert(`❌ Auth fail => tries left: ${MAX_AUTH_ATTEMPTS - vaultData.authAttempts}`);
   }
   await promptAndSaveVault();
@@ -466,37 +464,32 @@ async function handleFailedAuthAttempt(){
  * Transaction Validation
  ******************************/
 function formatDisplayDate(ts){
-  const d = new Date(ts*1000);
+  const d=new Date(ts*1000);
   return d.toISOString().slice(0,10)+" "+d.toISOString().slice(11,19);
 }
-
 function formatWithCommas(num){
   return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 async function computeTransactionHash(prevHash, txObj){
-  const dataStr = JSON.stringify({ prevHash, ...txObj });
-  const buf = new TextEncoder().encode(dataStr);
-  const hashBuf = await crypto.subtle.digest('SHA-256', buf);
+  const dataStr=JSON.stringify({prevHash,...txObj});
+  const buf=new TextEncoder().encode(dataStr);
+  const hashBuf=await crypto.subtle.digest('SHA-256',buf);
   return Array.from(new Uint8Array(hashBuf))
-    .map(b => b.toString(16).padStart(2,'0'))
-    .join('');
+    .map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
 async function computeFullChainHash(transactions){
-  let rHash = '';
-  const sorted = [...transactions].sort((a,b)=>a.timestamp - b.timestamp);
+  let rHash='';
+  const sorted=[...transactions].sort((a,b)=>a.timestamp-b.timestamp);
   for(const t of sorted){
-    const tmp = {
-      type: t.type, 
-      amount: t.amount, 
-      timestamp: t.timestamp,
-      status: t.status, 
-      bioCatch: t.bioCatch,
-      bonusConstantAtGeneration: t.bonusConstantAtGeneration,
-      previousHash: rHash
+    const tmp={
+      type:t.type,amount:t.amount,timestamp:t.timestamp,
+      status:t.status,bioCatch:t.bioCatch,
+      bonusConstantAtGeneration:t.bonusConstantAtGeneration,
+      previousHash:rHash
     };
-    rHash = await computeTransactionHash(rHash, tmp);
+    rHash=await computeTransactionHash(rHash, tmp);
   }
   return rHash;
 }
@@ -505,19 +498,18 @@ async function computeFullChainHash(transactions){
  * Bonus Logic
  ******************************/
 function resetDailyUsageIfNeeded(nowSec){
-  const dateStr = new Date(nowSec*1000).toISOString().slice(0,10);
-  if(vaultData.dailyCashback.date !== dateStr){
-    vaultData.dailyCashback.date = dateStr;
-    vaultData.dailyCashback.usedCount = 0;
+  const dateStr=new Date(nowSec*1000).toISOString().slice(0,10);
+  if(vaultData.dailyCashback.date!==dateStr){
+    vaultData.dailyCashback.date=dateStr;
+    vaultData.dailyCashback.usedCount=0;
   }
 }
-
 function resetMonthlyUsageIfNeeded(nowSec){
-  const d = new Date(nowSec*1000);
-  const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
-  if(vaultData.monthlyUsage.yearMonth !== ym){
-    vaultData.monthlyUsage.yearMonth = ym;
-    vaultData.monthlyUsage.usedCount = 0;
+  const d=new Date(nowSec*1000);
+  const ym=`${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`;
+  if(vaultData.monthlyUsage.yearMonth!==ym){
+    vaultData.monthlyUsage.yearMonth=ym;
+    vaultData.monthlyUsage.usedCount=0;
   }
 }
 
@@ -525,30 +517,30 @@ function resetMonthlyUsageIfNeeded(nowSec){
  * "2+1" rule => among 3 daily bonuses, max 2 can share the same origin type
  */
 function bonusDiversityCheck(newTxType){
-  const dateStr = vaultData.dailyCashback.date;
-  let sentCount = 0, receivedCount = 0;
+  const dateStr=vaultData.dailyCashback.date;
+  let sentCount=0, receivedCount=0;
   for(const tx of vaultData.transactions){
     if(tx.type==='cashback'){
-      const dStr = new Date(tx.timestamp*1000).toISOString().slice(0,10);
+      const dStr=new Date(tx.timestamp*1000).toISOString().slice(0,10);
       if(dStr===dateStr && tx.triggerOrigin){
-        if(tx.triggerOrigin==='sent') sentCount++;
-        else if(tx.triggerOrigin==='received') receivedCount++;
+        if(tx.triggerOrigin==='sent')sentCount++;
+        else if(tx.triggerOrigin==='received')receivedCount++;
       }
     }
   }
-  if(newTxType==='sent' && sentCount>=2)return false;
-  if(newTxType==='received' && receivedCount>=2)return false;
+  if(newTxType==='sent'&&sentCount>=2)return false;
+  if(newTxType==='received'&&receivedCount>=2)return false;
   return true;
 }
 
-function canGive120Bonus(nowSec, newTxType, newTxAmount){
+function canGive120Bonus(nowSec,newTxType,newTxAmount){
   resetDailyUsageIfNeeded(nowSec);
   resetMonthlyUsageIfNeeded(nowSec);
-  if(vaultData.dailyCashback.usedCount>=3) return false;
-  if(vaultData.monthlyUsage.usedCount>=30) return false;
-  if((vaultData.annualBonusUsed||0)>=10800) return false;
+  if(vaultData.dailyCashback.usedCount>=MAX_BONUSES_PER_DAY) return false;
+  if(vaultData.monthlyUsage.usedCount>=MAX_BONUSES_PER_MONTH) return false;
+  if((vaultData.annualBonusUsed||0)>=MAX_ANNUAL_BONUS_TVM) return false;
 
-  if(newTxType==='sent' && newTxAmount<=240) return false;
+  if(newTxType==='sent'&&newTxAmount<=240) return false;
   if(!bonusDiversityCheck(newTxType)) return false;
   return true;
 }
@@ -556,101 +548,85 @@ function canGive120Bonus(nowSec, newTxType, newTxAmount){
 function record120BonusUsage(origin){
   vaultData.dailyCashback.usedCount++;
   vaultData.monthlyUsage.usedCount++;
-  vaultData.annualBonusUsed = (vaultData.annualBonusUsed||0) + PER_TX_BONUS;
+  vaultData.annualBonusUsed=(vaultData.annualBonusUsed||0)+PER_TX_BONUS;
 }
 
 /******************************
  * Generate & Validate BioCatch
  ******************************/
-/**
- * generateBioCatchNumber():
- *   Creates a string "Bio-<someNum>-<timestamp>-<amount>-<senderBalance>-<senderIBAN>-<finalChainHash>-<encodedVault>"
- */
 async function generateBioCatchNumber(senderBioIBAN, receiverBioIBAN, amount, timestamp, senderBalance, finalChainHash){
-  // 1. We serialize the vault for proof
-  const encodedVault = serializeVaultSnapshotForBioCatch(vaultData);
-  // 2. Derive numeric from IBAN
-  const senderNumeric = parseInt(senderBioIBAN.slice(3));
-  const receiverNumeric = parseInt(receiverBioIBAN.slice(3));
-  // 3. A "firstPart" = sum
-  const firstPart = senderNumeric + receiverNumeric;
-  // 4. Return the final string:
+  const encodedVault=serializeVaultSnapshotForBioCatch(vaultData);
+  const senderNumeric=parseInt(senderBioIBAN.slice(3));
+  const receiverNumeric=parseInt(receiverBioIBAN.slice(3));
+  const firstPart=senderNumeric+receiverNumeric;
   return `Bio-${firstPart}-${timestamp}-${amount}-${senderBalance}-${senderBioIBAN}-${finalChainHash}-${encodedVault}`;
 }
 
-/**
- * validateBioCatchNumber():
- *   Checks structure & replay issues. Returns { valid: true/false, message, chainHash, claimedSenderIBAN, senderVaultSnapshot }
- */
 async function validateBioCatchNumber(bioCatchNumber, claimedAmount){
-  const parts = bioCatchNumber.split('-');
-  if(parts.length!==8 || parts[0]!=='Bio'){
-    return { valid:false, message:'BioCatch must have 8 parts with prefix "Bio-".' };
+  const parts=bioCatchNumber.split('-');
+  if(parts.length!==8||parts[0]!=='Bio'){
+    return{valid:false,message:'BioCatch must have 8 parts with prefix "Bio-".'};
   }
-  const [
-    , firstPartStr, timestampStr, amountStr,
-    claimedSenderBalanceStr, claimedSenderIBAN, chainHash, snapshotEncoded
-  ] = parts;
+  const[, firstPartStr,timestampStr,amountStr,claimedSenderBalanceStr,claimedSenderIBAN,chainHash,snapshotEncoded]=parts;
+  const firstPart=parseInt(firstPartStr);
+  const encodedTimestamp=parseInt(timestampStr);
+  const encodedAmount=parseFloat(amountStr);
+  const claimedSenderBalance=parseFloat(claimedSenderBalanceStr);
 
-  const firstPart = parseInt(firstPartStr);
-  const encodedTimestamp = parseInt(timestampStr);
-  const encodedAmount = parseFloat(amountStr);
-  const claimedSenderBalance = parseFloat(claimedSenderBalanceStr);
-
-  if(isNaN(firstPart) || isNaN(encodedTimestamp) || isNaN(encodedAmount) || isNaN(claimedSenderBalance)){
-    return { valid:false, message:'Numeric parts must be valid numbers.' };
+  if(isNaN(firstPart)||isNaN(encodedTimestamp)||isNaN(encodedAmount)||isNaN(claimedSenderBalance)){
+    return{valid:false,message:'Numeric parts must be valid numbers.'};
   }
-  const senderNumeric = parseInt(claimedSenderIBAN.slice(3));
-  const receiverNumeric = firstPart - senderNumeric;
+  const senderNumeric=parseInt(claimedSenderIBAN.slice(3));
+  const receiverNumeric=firstPart-senderNumeric;
   if(receiverNumeric<0){
-    return { valid:false, message:'Invalid sender numeric in BioCatch.' };
+    return{valid:false,message:'Invalid sender numeric in BioCatch.'};
   }
-  const expectedFirstPart = senderNumeric + receiverNumeric;
+  const expectedFirstPart=senderNumeric+receiverNumeric;
   if(firstPart!==expectedFirstPart){
-    return { valid:false, message:'Mismatch in sum of IBAN numerics.' };
+    return{valid:false,message:'Mismatch in sum of IBAN numerics.'};
   }
   if(!vaultData.bioIBAN){
-    return { valid:false, message:'Receiver IBAN not found in vault.' };
+    return{valid:false,message:'Receiver IBAN not found in vault.'};
   }
-  const receiverNumericFromVault = parseInt(vaultData.bioIBAN.slice(3));
+  const receiverNumericFromVault=parseInt(vaultData.bioIBAN.slice(3));
   if(receiverNumeric!==receiverNumericFromVault){
-    return { valid:false, message:'This BioCatch is not intended for this receiver IBAN.' };
+    return{valid:false,message:'This BioCatch is not intended for this receiver IBAN.'};
   }
   if(encodedAmount!==claimedAmount){
-    return { valid:false, message:'Claimed amount does not match BioCatch amount.' };
+    return{valid:false,message:'Claimed amount does not match BioCatch amount.'};
   }
 
-  // Time window check
-  const currentTimestamp = vaultData.lastUTCTimestamp;
-  const timeDiff = Math.abs(currentTimestamp - encodedTimestamp);
+  // Time window
+  const currentTimestamp=vaultData.lastUTCTimestamp;
+  const timeDiff=Math.abs(currentTimestamp-encodedTimestamp);
   if(timeDiff>TRANSACTION_VALIDITY_SECONDS){
-    return { valid:false, message:'Timestamp outside ±12min window.' };
+    return{valid:false,message:'Timestamp outside ±12min window.'};
   }
 
-  // Try to parse the snapshot
+  // Attempt snapshot parse
   let senderVaultSnapshot;
-  try {
-    senderVaultSnapshot = deserializeVaultSnapshotFromBioCatch(snapshotEncoded);
-  } catch(err){
-    return { valid:false, message:`Snapshot parse error: ${err.message}` };
+  try{
+    senderVaultSnapshot=deserializeVaultSnapshotFromBioCatch(snapshotEncoded);
+  }catch(err){
+    return{valid:false,message:`Snapshot parse error: ${err.message}`};
   }
 
   // If it's a BONUS IBAN
   if(claimedSenderIBAN.startsWith("BONUS")){
-    const offset = encodedTimestamp - senderVaultSnapshot.joinTimestamp;
-    const expected = "BONUS" + (senderVaultSnapshot.bonusConstant + offset);
+    const offset=encodedTimestamp-senderVaultSnapshot.joinTimestamp;
+    const expected="BONUS"+(senderVaultSnapshot.bonusConstant+offset);
     if(claimedSenderIBAN!==expected){
-      return { valid:false, message:'Mismatched Bonus Sender IBAN in BioCatch.' };
+      return{valid:false,message:'Mismatched Bonus Sender IBAN in BioCatch.'};
     }
-  } else {
+  }else{
     // Normal "BIO"
-    const expectedSenderIBAN = `BIO${senderVaultSnapshot.initialBioConstant + senderVaultSnapshot.joinTimestamp}`;
+    const expectedSenderIBAN=`BIO${senderVaultSnapshot.initialBioConstant+senderVaultSnapshot.joinTimestamp}`;
     if(claimedSenderIBAN!==expectedSenderIBAN){
-      return { valid:false, message:'Mismatched Sender IBAN in BioCatch.' };
+      return{valid:false,message:'Mismatched Sender IBAN in BioCatch.'};
     }
   }
 
-  return {
+  return{
     valid:true,
     message:'OK',
     chainHash,
@@ -675,9 +651,9 @@ async function handleSendTransaction(){
   }
   transactionLock=true;
   try{
-    const recv = document.getElementById('receiverBioIBAN')?.value.trim();
-    const amt = parseFloat(document.getElementById('catchOutAmount')?.value.trim());
-    if(!recv || isNaN(amt) || amt<=0){
+    const recv=document.getElementById('receiverBioIBAN')?.value.trim();
+    const amt=parseFloat(document.getElementById('catchOutAmount')?.value.trim());
+    if(!recv||isNaN(amt)||amt<=0){
       alert("Invalid receiver or amount");
       return;
     }
@@ -690,18 +666,18 @@ async function handleSendTransaction(){
       return;
     }
 
-    const nowSec = Math.floor(Date.now()/1000);
-    vaultData.lastUTCTimestamp = nowSec;
+    const nowSec=Math.floor(Date.now()/1000);
+    vaultData.lastUTCTimestamp=nowSec;
 
     let bonusGranted=false;
     if(canGive120Bonus(nowSec,'sent',amt)){
       record120BonusUsage('sent');
       bonusGranted=true;
     }
-    vaultData.finalChainHash = await computeFullChainHash(vaultData.transactions);
+    vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-    const plainBio = await generateBioCatchNumber(
-      vaultData.bioIBAN, recv, amt, nowSec, vaultData.balanceTVM, vaultData.finalChainHash
+    const plainBio=await generateBioCatchNumber(
+      vaultData.bioIBAN,recv,amt,nowSec,vaultData.balanceTVM,vaultData.finalChainHash
     );
     // Check uniqueness
     for(const tx of vaultData.transactions){
@@ -732,7 +708,7 @@ async function handleSendTransaction(){
     vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
     if(bonusGranted){
-      const offset=nowSec - vaultData.joinTimestamp;
+      const offset=nowSec-vaultData.joinTimestamp;
       const bonusIBAN=`BONUS${vaultData.bonusConstant+offset}`;
       const bonusTx={
         type:'cashback',
@@ -751,8 +727,8 @@ async function handleSendTransaction(){
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // Auto-redeem
-      if(vaultData.userWallet && vaultData.userWallet.length>0 && vaultData.credentialId){
+      // Auto redeem if wallet & credential are present
+      if(vaultData.userWallet&&vaultData.userWallet.length>0&&vaultData.credentialId){
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
       }
@@ -765,10 +741,10 @@ async function handleSendTransaction(){
     document.getElementById('receiverBioIBAN').value='';
     document.getElementById('catchOutAmount').value='';
     renderTransactionTable();
-  } catch(err){
-    console.error("Send Tx Error=>", err);
+  }catch(err){
+    console.error("Send Tx Error=>",err);
     alert("Error in sending transaction");
-  } finally{
+  }finally{
     transactionLock=false;
   }
 }
@@ -784,15 +760,15 @@ async function handleReceiveTransaction(){
   }
   transactionLock=true;
   try{
-    const encBio = document.getElementById('catchInBioCatch')?.value.trim();
-    const amt = parseFloat(document.getElementById('catchInAmount')?.value.trim());
-    if(!encBio || isNaN(amt) || amt<=0){
+    const encBio=document.getElementById('catchInBioCatch')?.value.trim();
+    const amt=parseFloat(document.getElementById('catchInAmount')?.value.trim());
+    if(!encBio||isNaN(amt)||amt<=0){
       alert("Invalid BioCatch or amount");
       transactionLock=false;
       return;
     }
 
-    const nowSec = Math.floor(Date.now()/1000);
+    const nowSec=Math.floor(Date.now()/1000);
     vaultData.lastUTCTimestamp=nowSec;
 
     let bonusGranted=false;
@@ -818,13 +794,13 @@ async function handleReceiveTransaction(){
         }
       }
     }
-    const validation=await validateBioCatchNumber(decBio, amt);
+    const validation=await validateBioCatchNumber(decBio,amt);
     if(!validation.valid){
       alert(`BioCatch fail => ${validation.message}`);
       transactionLock=false;
       return;
     }
-    const { chainHash, claimedSenderIBAN, senderVaultSnapshot }=validation;
+    const{chainHash,claimedSenderIBAN,senderVaultSnapshot}=validation;
     const crossCheck=await verifyFullChainAndBioConstant(senderVaultSnapshot);
     if(!crossCheck.success){
       alert(`Sender chain mismatch => ${crossCheck.reason}`);
@@ -836,7 +812,7 @@ async function handleReceiveTransaction(){
       transactionLock=false;
       return;
     }
-    const snapVal=await validateSenderVaultSnapshot(senderVaultSnapshot, claimedSenderIBAN);
+    const snapVal=await validateSenderVaultSnapshot(senderVaultSnapshot,claimedSenderIBAN);
     if(!snapVal.valid){
       alert("Sender snapshot fail =>"+snapVal.errors.join("; "));
       transactionLock=false;
@@ -855,7 +831,7 @@ async function handleReceiveTransaction(){
     vaultData.transactions.push(rxTx);
 
     if(bonusGranted){
-      const offset=nowSec - vaultData.joinTimestamp;
+      const offset=nowSec-vaultData.joinTimestamp;
       const bonusIBAN=`BONUS${vaultData.bonusConstant+offset}`;
       const bonusTx={
         type:'cashback',
@@ -869,13 +845,13 @@ async function handleReceiveTransaction(){
         triggerOrigin:'received',
         bonusId:vaultData.nextBonusId++
       };
-      bonusTx.txHash=await computeTransactionHash(vaultData.lastTransactionHash, bonusTx);
+      bonusTx.txHash=await computeTransactionHash(vaultData.lastTransactionHash,bonusTx);
       vaultData.transactions.push(bonusTx);
       vaultData.lastTransactionHash=bonusTx.txHash;
       vaultData.finalChainHash=await computeFullChainHash(vaultData.transactions);
 
-      // Auto-redeem
-      if(vaultData.userWallet && vaultData.userWallet.length>0 && vaultData.credentialId){
+      // Auto redeem if wallet & credential are present
+      if(vaultData.userWallet&&vaultData.userWallet.length>0&&vaultData.credentialId){
         console.log("Auto‑redeeming bonus on chain...");
         await redeemBonusOnChain(bonusTx);
       }
@@ -886,11 +862,55 @@ async function handleReceiveTransaction(){
     document.getElementById('catchInBioCatch').value='';
     document.getElementById('catchInAmount').value='';
     renderTransactionTable();
-  } catch(err){
-    console.error("Receive Tx Error=>", err);
+  }catch(err){
+    console.error("Receive Tx Error=>",err);
     alert("Error receiving transaction");
-  } finally{
+  }finally{
     transactionLock=false;
+  }
+}
+
+/******************************
+ * Manual Redeem All Unredeemed
+ ******************************/
+/**
+ * This function finds all bonus (cashback) transactions with status==='Granted'
+ * and attempts to redeem them on-chain. 
+ * Then marks them as "Redeemed" if successful.
+ */
+async function redeemAllUnredeemedBonuses(){
+  if(!vaultData.userWallet||vaultData.userWallet.length<5){
+    alert("No valid wallet. Please set one.");
+    return;
+  }
+  if(!vaultData.credentialId){
+    alert("No device key => cannot proceed!");
+    return;
+  }
+  try{
+    // Gather all unredeemed bonus TX
+    const unredeemedTx=vaultData.transactions.filter(tx=>
+      tx.type==='cashback' && tx.status==='Granted'
+    );
+    if(unredeemedTx.length===0){
+      alert("No unredeemed bonuses found.");
+      return;
+    }
+    // Redeem them all
+    for(const bonusTx of unredeemedTx){
+      await redeemBonusOnChain(bonusTx);  
+      // If success, mark TX as "Redeemed"
+      // (In real code, you'd wait for on-chain confirmation, etc.)
+      bonusTx.status='Redeemed';
+      console.log(`Bonus #${bonusTx.bonusId} => Marked as redeemed`);
+    }
+    await promptAndSaveVault();
+    populateWalletUI();
+    renderTransactionTable();
+    alert("All unredeemed bonuses processed!");
+  }catch(err){
+    console.error("redeemAllUnredeemedBonuses => error:",err);
+    alert("Error in redeemAllUnredeemedBonuses => see console");
   }
 }
 
@@ -899,32 +919,31 @@ async function handleReceiveTransaction(){
  ******************************/
 function renderTransactionTable(){
   const tbody=document.getElementById('transactionBody');
-  if(!tbody) return;
+  if(!tbody)return;
   tbody.innerHTML='';
 
-  // Sort descending by timestamp
-  const sorted=[...vaultData.transactions].sort((a,b)=>b.timestamp - a.timestamp);
-  sorted.forEach(tx=>{
+  const sorted=[...vaultData.transactions].sort((a,b)=>b.timestamp-a.timestamp);
+  for(const tx of sorted){
     const row=document.createElement('tr');
-    let bioIBANCell='—',
-        bioCatchCell=tx.bioCatch||'—',
-        amtCell=tx.amount,
-        dateCell=formatDisplayDate(tx.timestamp),
-        statusCell=tx.status;
+    let bioIBANCell='—';
+    let bioCatchCell=tx.bioCatch||'—';
+    let amtCell=tx.amount;
+    let dateCell=formatDisplayDate(tx.timestamp);
+    let statusCell=tx.status;
 
     if(tx.type==='sent'){
       bioIBANCell=tx.receiverBioIBAN;
-    } else if(tx.type==='received'){
+    }else if(tx.type==='received'){
       bioIBANCell=tx.senderBioIBAN||'Unknown';
-    } else if(tx.type==='cashback'){
+    }else if(tx.type==='cashback'){
       bioIBANCell=`System/Bonus (ID=${tx.bonusId||''})`;
-    } else if(tx.type==='increment'){
+    }else if(tx.type==='increment'){
       bioIBANCell='Periodic Increment';
     }
 
     // Truncate displayed BioCatch
     if(tx.bioCatch && tx.bioCatch.length>12){
-      bioCatchCell = tx.bioCatch.slice(0,12)+'...';
+      bioCatchCell=tx.bioCatch.slice(0,12)+'...';
     }
 
     row.innerHTML=`
@@ -935,7 +954,7 @@ function renderTransactionTable(){
       <td>${statusCell}</td>
     `;
     tbody.appendChild(row);
-  });
+  }
 }
 
 /******************************
@@ -950,18 +969,18 @@ function showVaultUI(){
 }
 
 function initializeBioConstantAndUTCTime(){
-  const nowSec = Math.floor(Date.now()/1000);
+  const nowSec=Math.floor(Date.now()/1000);
   vaultData.lastUTCTimestamp=nowSec;
   populateWalletUI();
-  if(bioLineIntervalTimer) clearInterval(bioLineIntervalTimer);
+  if(bioLineIntervalTimer)clearInterval(bioLineIntervalTimer);
   bioLineIntervalTimer=setInterval(()=>{
     vaultData.lastUTCTimestamp=Math.floor(Date.now()/1000);
     populateWalletUI();
-  }, 1000);
+  },1000);
 }
 
 function populateWalletUI(){
-  const ibInp = document.getElementById('bioibanInput');
+  const ibInp=document.getElementById('bioibanInput');
   if(ibInp){
     ibInp.value=vaultData.bioIBAN||"BIO...";
   }
@@ -971,13 +990,12 @@ function populateWalletUI(){
   const sx=vaultData.transactions
     .filter(t=>t.type==='sent').reduce((a,b)=>a+b.amount,0);
   const bx=vaultData.transactions
-    .filter(t=>t.type==='cashback'||t.type==='increment')
-    .reduce((a,b)=>a+b.amount,0);
+    .filter(t=>t.type==='cashback'||t.type==='increment').reduce((a,b)=>a+b.amount,0);
 
-  vaultData.balanceTVM = vaultData.initialBalanceTVM + rx + bx - sx;
-  vaultData.balanceUSD = parseFloat((vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2));
+  vaultData.balanceTVM=vaultData.initialBalanceTVM+rx+bx-sx;
+  vaultData.balanceUSD=parseFloat((vaultData.balanceTVM/EXCHANGE_RATE).toFixed(2));
 
-  const tvmEl = document.getElementById('tvmBalance');
+  const tvmEl=document.getElementById('tvmBalance');
   if(tvmEl){
     tvmEl.textContent=`Balance: ${formatWithCommas(vaultData.balanceTVM)} TVM`;
   }
@@ -985,14 +1003,17 @@ function populateWalletUI(){
   if(usdEl){
     usdEl.textContent=`Equivalent to ${formatWithCommas(vaultData.balanceUSD)} USD`;
   }
+
   const bioLineText=document.getElementById('bioLineText');
   if(bioLineText){
     bioLineText.textContent=`🔄 BonusConstant: ${vaultData.bonusConstant}`;
   }
+
   const utcEl=document.getElementById('utcTime');
   if(utcEl){
     utcEl.textContent=formatDisplayDate(vaultData.lastUTCTimestamp);
   }
+
   const userWalletLabel=document.getElementById('userWalletLabel');
   if(userWalletLabel){
     userWalletLabel.textContent=vaultData.userWallet
@@ -1001,9 +1022,6 @@ function populateWalletUI(){
   }
 }
 
-/**
- * Show truncated BioCatch in the popup, store full in data-fullCatch.
- */
 function showBioCatchPopup(encBio){
   const popup=document.getElementById('bioCatchPopup');
   if(!popup)return;
@@ -1029,14 +1047,14 @@ function exportTransactionTable(){
     const line=[];
     cols.forEach(c=>{
       let d=c.innerText.replace(/"/g,'""');
-      if(d.includes(',')) d=`"${d}"`;
+      if(d.includes(','))d=`"${d}"`;
       line.push(d);
     });
     csv+=line.join(",")+"\r\n";
   });
   const encodedUri=encodeURI(csv);
   const link=document.createElement('a');
-  link.setAttribute('href', encodedUri);
+  link.setAttribute('href',encodedUri);
   link.setAttribute('download','transaction_history.csv');
   document.body.appendChild(link);
   link.click();
@@ -1045,7 +1063,7 @@ function exportTransactionTable(){
 
 function exportVaultBackup(){
   const data=JSON.stringify(vaultData,null,2);
-  const blob=new Blob([data], {type:'application/json'});
+  const blob=new Blob([data],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;
@@ -1056,11 +1074,8 @@ function exportVaultBackup(){
   URL.revokeObjectURL(url);
 }
 
-/******************************
- * Mobile-friendly .vault Backup
- ******************************/
 function exportVaultBackupForMobile(){
-  const backupObj = vaultData;
+  const backupObj=vaultData;
   const textData=JSON.stringify(backupObj);
   const blob=new Blob([textData],{type:'application/octet-stream'});
   const url=URL.createObjectURL(blob);
@@ -1071,6 +1086,7 @@ function exportVaultBackupForMobile(){
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
   alert("Vault exported as 'myBioVault.vault'. On mobile, you can re-import this file to restore.");
 }
 
@@ -1078,20 +1094,19 @@ async function importVaultBackupFromFile(file){
   try{
     const text=await file.text();
     const parsed=JSON.parse(text);
-    // Overwrite existing vaultData
     vaultData=parsed;
 
     if(!derivedKey){
       alert("Vault imported, but no derivedKey => please unlock or re-create your passphrase.");
     }else{
       await promptAndSaveVault();
-      console.log("Imported vaultData from file =>", vaultData);
+      console.log("Imported vaultData from file =>",vaultData);
       alert("✅ Vault imported successfully!");
       populateWalletUI();
       renderTransactionTable();
     }
   }catch(err){
-    console.error("Failed to import .vault file =>", err);
+    console.error("Failed to import .vault file =>",err);
     alert("❌ Invalid or corrupted .vault file");
   }
 }
@@ -1114,7 +1129,7 @@ function handleCopyBioIBAN(){
  * On-Chain Stub for Bonus
  ******************************/
 async function redeemBonusOnChain(tx){
-  console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:", tx);
+  console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:",tx);
   if(!tx||!tx.bonusId){
     alert("Invalid bonus or missing bonusId");
     return;
@@ -1132,6 +1147,7 @@ async function redeemBonusOnChain(tx){
       alert("No MetaMask or web3 provider found!");
       return;
     }
+    // Request accounts
     await window.ethereum.request({ method:'eth_requestAccounts' });
     const provider=new ethers.providers.Web3Provider(window.ethereum);
     const signer=provider.getSigner();
@@ -1141,7 +1157,21 @@ async function redeemBonusOnChain(tx){
     if(userAddr.toLowerCase()!==vaultData.userWallet.toLowerCase()){
       alert("Warning: active metamask address != vaultData.userWallet. Proceeding anyway...");
     }
-    // Insert real contract calls here:
+
+    /**
+     * PRODUCTION-READY SMART CONTRACT CALL:
+     *   E.g.:
+     *   const contractAddr="0xYourContractHere";
+     *   const contractABI=[ ...ABI... ];
+     *   const contract=new ethers.Contract(contractAddr,contractABI,signer);
+     *   // This function might be called "mintBonus" or "redeemBonus" or something similar:
+     *   const txResp=await contract.redeemBonus(vaultData.userWallet, tx.bonusId);
+     *   const receipt=await txResp.wait();
+     *   console.log("Bonus redemption =>",receipt);
+     *   alert(`Redeemed bonus #${tx.bonusId} on chain, txHash= ${receipt.transactionHash}`);
+     */
+
+    // For now, just a stub:
     alert(`(Stub) Bonus #${tx.bonusId} => minted to ${vaultData.userWallet}. Fill in real calls!`);
   }catch(err){
     console.error("redeemBonusOnChain => error:",err);
@@ -1153,13 +1183,13 @@ async function redeemBonusOnChain(tx){
  * Multi-Tab / Single Vault
  ******************************/
 function preventMultipleVaults(){
-  window.addEventListener('storage', evt=>{
+  window.addEventListener('storage',evt=>{
     if(evt.key==='vaultUnlocked'){
       if(evt.newValue==='true' && !vaultUnlocked){
         vaultUnlocked=true;
         showVaultUI();
         initializeBioConstantAndUTCTime();
-      }else if(evt.newValue==='false'&&vaultUnlocked){
+      }else if(evt.newValue==='false' && vaultUnlocked){
         vaultUnlocked=false;
         lockVault();
       }
@@ -1181,7 +1211,7 @@ async function enforceStoragePersistence(){
   const persisted=await navigator.storage.persisted();
   if(!persisted){
     const granted=await navigator.storage.persist();
-    console.log(granted? "🔒 Storage hardened":"⚠️ Storage not persisted");
+    console.log(granted ? "🔒 Storage hardened" : "⚠️ Storage not persisted");
   }
   setInterval(async()=>{
     const est=await navigator.storage.estimate();
@@ -1189,24 +1219,23 @@ async function enforceStoragePersistence(){
       console.warn("Storage near limit =>",est);
       alert("Storage near limit => export backup!");
     }
-  }, STORAGE_CHECK_INTERVAL);
+  },STORAGE_CHECK_INTERVAL);
 }
 
 /******************************
  * DOM Load & UI Initialization
  ******************************/
 function loadVaultOnStartup(){
-  // Optional
+  // optional
 }
 
-window.addEventListener('DOMContentLoaded', ()=>{
-  // If you store the last visited URL:
+window.addEventListener('DOMContentLoaded',()=>{
   const lastURL=localStorage.getItem("last_session_url");
-  if(lastURL && window.location.href!==lastURL){
+  if(lastURL&&window.location.href!==lastURL){
     window.location.href=lastURL;
   }
   window.addEventListener("beforeunload",()=>{
-    localStorage.setItem("last_session_url", window.location.href);
+    localStorage.setItem("last_session_url",window.location.href);
   });
 
   console.log("✅ main.js => Offline Vault + On-Chain Stub");
@@ -1215,20 +1244,21 @@ window.addEventListener('DOMContentLoaded', ()=>{
   preventMultipleVaults();
   enforceStoragePersistence();
 
-  vaultSyncChannel.onmessage= async(e)=>{
+  // If another tab updates the vault
+  vaultSyncChannel.onmessage=async(e)=>{
     if(e.data?.type==='vaultUpdate'){
       try{
-        const{ iv, data }=e.data.payload;
+        const{ iv,data }=e.data.payload;
         if(!derivedKey){
           console.warn("vaultUpdate => derivedKey not available yet");
           return;
         }
-        const dec=await decryptData(derivedKey, base64ToBuffer(iv), base64ToBuffer(data));
-        Object.assign(vaultData, dec);
+        const dec=await decryptData(derivedKey,base64ToBuffer(iv),base64ToBuffer(data));
+        Object.assign(vaultData,dec);
         populateWalletUI();
         console.log("🔄 Synced vault across tabs");
       }catch(err){
-        console.error("Tab sync fail =>", err);
+        console.error("Tab sync fail =>",err);
       }
     }
   };
@@ -1237,29 +1267,29 @@ window.addEventListener('DOMContentLoaded', ()=>{
 
 function initializeUI(){
   const enterVaultBtn=document.getElementById('enterVaultBtn');
-  enterVaultBtn?.addEventListener('click', checkAndUnlockVault);
+  enterVaultBtn?.addEventListener('click',checkAndUnlockVault);
 
   const lockVaultBtn=document.getElementById('lockVaultBtn');
-  lockVaultBtn?.addEventListener('click', lockVault);
+  lockVaultBtn?.addEventListener('click',lockVault);
 
   const catchInBtn=document.getElementById('catchInBtn');
-  catchInBtn?.addEventListener('click', handleReceiveTransaction);
+  catchInBtn?.addEventListener('click',handleReceiveTransaction);
 
   const catchOutBtn=document.getElementById('catchOutBtn');
-  catchOutBtn?.addEventListener('click', handleSendTransaction);
+  catchOutBtn?.addEventListener('click',handleSendTransaction);
 
   const copyBioIBANBtn=document.getElementById('copyBioIBANBtn');
-  copyBioIBANBtn?.addEventListener('click', handleCopyBioIBAN);
+  copyBioIBANBtn?.addEventListener('click',handleCopyBioIBAN);
 
   const exportBtn=document.getElementById('exportBtn');
-  exportBtn?.addEventListener('click', exportTransactionTable);
+  exportBtn?.addEventListener('click',exportTransactionTable);
 
   const exportBackupBtn=document.getElementById('exportBackupBtn');
-  exportBackupBtn?.addEventListener('click', exportVaultBackup);
+  exportBackupBtn?.addEventListener('click',exportVaultBackup);
 
   const exportFriendlyBtn=document.getElementById('exportFriendlyBtn');
   if(exportFriendlyBtn){
-    exportFriendlyBtn.addEventListener('click', exportVaultBackupForMobile);
+    exportFriendlyBtn.addEventListener('click',exportVaultBackupForMobile);
   }
 
   const importVaultFileInput=document.getElementById('importVaultFileInput');
@@ -1269,6 +1299,12 @@ function initializeUI(){
         await importVaultBackupFromFile(evt.target.files[0]);
       }
     });
+  }
+
+  // "Redeem All Bonuses" Button
+  const redeemAllBonusesBtn=document.getElementById('redeemAllBonusesBtn');
+  if(redeemAllBonusesBtn){
+    redeemAllBonusesBtn.addEventListener('click',redeemAllUnredeemedBonuses);
   }
 
   // BioCatch popup
@@ -1317,6 +1353,7 @@ function initializeUI(){
     alert("✅ Wallet address saved to vaultData. It cannot be changed.");
   });
 
+  // MetaMask autoConnect
   const autoConnectWalletBtn=document.getElementById('autoConnectWalletBtn');
   autoConnectWalletBtn?.addEventListener('click',async()=>{
     if(!window.ethereum){
@@ -1324,7 +1361,7 @@ function initializeUI(){
       return;
     }
     try{
-      await window.ethereum.request({method:'eth_requestAccounts'});
+      await window.ethereum.request({ method:'eth_requestAccounts' });
       const provider=new ethers.providers.Web3Provider(window.ethereum);
       const signer=provider.getSigner();
       const userAddr=await signer.getAddress();
@@ -1337,7 +1374,7 @@ function initializeUI(){
       }else if(vaultData.userWallet.toLowerCase()!==userAddr.toLowerCase()){
         alert("Warning: The vault already has a different wallet address set!");
       }else{
-        alert(`Your current vault address matches the connected MetaMask account: ${userAddr}`);
+        alert(`Your vault address matches the connected MetaMask account: ${userAddr}`);
       }
     }catch(err){
       console.error("AutoConnect error =>",err);
@@ -1350,7 +1387,7 @@ function initializeUI(){
  * PWA "Add to Home Screen"
  ******************************/
 let deferredPrompt=null;
-window.addEventListener('beforeinstallprompt', e=>{
+window.addEventListener('beforeinstallprompt',e=>{
   e.preventDefault();
   deferredPrompt=e;
   console.log("⭐ 'beforeinstallprompt' captured — call promptInstallA2HS() to show UI prompt.");
@@ -1384,9 +1421,9 @@ async function verifyFullChainAndBioConstant(senderVaultSnapshot){
   return { success:true };
 }
 
-async function validateSenderVaultSnapshot(senderVaultSnapshot, claimedSenderIBAN){
+async function validateSenderVaultSnapshot(senderVaultSnapshot,claimedSenderIBAN){
   // Stub => always valid
-  return { valid:true, errors:[] };
+  return { valid:true,errors:[] };
 }
 
 /******************************
@@ -1428,7 +1465,7 @@ function deserializeVaultSnapshotFromBioCatch(base64String){
   const raw=atob(base64String);
   const parts=raw.split('|');
   if(parts.length<8){
-    throw new Error('Vault snapshot missing fields: need >=8 top-level fields');
+    throw new Error('Vault snapshot missing fields: need >= 8 top-level fields');
   }
   const joinTimestamp=parseInt(parts[0],10);
   const initialBioConstant=parseInt(parts[1],10);
@@ -1444,7 +1481,7 @@ function deserializeVaultSnapshotFromBioCatch(base64String){
   const txChunks=txString.split(txSep).filter(Boolean);
   const transactions=txChunks.map(chunk=>{
     const txFields=chunk.split(txFieldSep);
-    return {
+    return{
       type:txFields[0]||'',
       receiverBioIBAN:txFields[1]||'',
       senderBioIBAN:txFields[2]||'',
