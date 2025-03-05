@@ -886,7 +886,6 @@ function handleCopyBioIBAN(){
 /******************************
  * On-Chain Logic Integration
  ******************************/
-import { ethers } from "ethers"; // Importing ethers for on-chain interaction
 
 async function redeemBonusOnChain(tx){
   console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:",tx);
