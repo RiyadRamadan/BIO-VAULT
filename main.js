@@ -884,15 +884,17 @@ function handleCopyBioIBAN(){
 }
 
 /******************************
- * On-Chain Stub for Bonus
+ * On-Chain Logic Integration
  ******************************/
+import { ethers } from "ethers"; // Importing ethers for on-chain interaction
+
 async function redeemBonusOnChain(tx){
-  console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:", tx);
+  console.log("[redeemBonusOnChain] => Attempt to redeem bonus tx:",tx);
   if(!tx||!tx.bonusId){
     alert("Invalid bonus or missing bonusId");
     return;
   }
-  if(!vaultData.userWallet || vaultData.userWallet.length<5){
+  if(!vaultData.userWallet||vaultData.userWallet.length<5){
     alert("No valid wallet address found!");
     return;
   }
@@ -905,18 +907,33 @@ async function redeemBonusOnChain(tx){
       alert("No MetaMask or web3 provider found!");
       return;
     }
+    // Request accounts
     await window.ethereum.request({ method:'eth_requestAccounts' });
     const provider=new ethers.providers.Web3Provider(window.ethereum);
     const signer=provider.getSigner();
-    let userAddr=await signer.getAddress();
-    console.log("User address =>", userAddr);
+    const userAddr=await signer.getAddress();
+    console.log("User address =>",userAddr);
 
     if(userAddr.toLowerCase()!==vaultData.userWallet.toLowerCase()){
       alert("Warning: active metamask address != vaultData.userWallet. Proceeding anyway...");
     }
 
+    /**
+     * PRODUCTION-READY SMART CONTRACT CALL:
+     *   E.g.:
+     *   const contractAddr="0xYourContractHere";
+     *   const contractABI=[ ...ABI... ];
+     *   const contract=new ethers.Contract(contractAddr,contractABI,signer);
+     *   // This function might be called "mintBonus" or "redeemBonus" or something similar:
+     *   const txResp=await contract.redeemBonus(vaultData.userWallet, tx.bonusId);
+     *   const receipt=await txResp.wait();
+     *   console.log("Bonus redemption =>",receipt);
+     *   alert(`Redeemed bonus #${tx.bonusId} on chain, txHash= ${receipt.transactionHash}`);
+     */
+
+    // For now, just a stub:
     alert(`(Stub) Bonus #${tx.bonusId} => minted to ${vaultData.userWallet}. Fill in real calls!`);
-  } catch(err){
+  }catch(err){
     console.error("redeemBonusOnChain => error:",err);
     alert("On-chain redemption failed => see console");
   }
