@@ -267,8 +267,7 @@ async function getPassphraseFromModal({ confirmNeeded=false, modalTitle='Enter P
     passTitle.textContent=modalTitle;
     passInput.value='';
     passConfirmInput.value='';
-    passConfirmLabel.style.display=confirmNeeded?'block':'none';
-    passConfirmInput.style.display=confirmNeeded?'block':'none';
+
 
     function cleanup(){
       passCancelBtn.removeEventListener('click', onCancel);
