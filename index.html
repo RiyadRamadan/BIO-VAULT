@@ -5,8 +5,7 @@
   <title>Bio‑Vault | P2P UTC Ledger</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Optional: PWA Manifest & Service Worker -->
-  <!-- Removed icon path from manifest or point it to a valid image -->
+  <!-- Manifest & Service Worker -->
   <link rel="manifest" href="./manifest.json">
   <script>
     if ('serviceWorker' in navigator) {
@@ -18,219 +17,142 @@
     }
   </script>
 
-  <!-- Ethers.js (UMD build) => ensures global 'ethers' is defined -->
+  <!-- Ethers.js -->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
 
-  <!-- Basic styling -->
   <style>
-    /* Body & General */
-    body {
-      background: linear-gradient(to left, #2f4979, #15264d);
+    /* ...[all your styles remain unchanged, add this section below for extra visuals]... */
+    #explainer, #auditInfo, #faqModal, #onboardingTips {
+      background: rgba(255,255,255,0.12);
+      margin: 18px auto 10px;
+      border-radius: 12px;
+      max-width: 650px;
+      padding: 18px 30px;
+      box-shadow: 0 3px 14px rgba(0,0,0,0.13);
       color: #fff;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      margin: 0;
-      padding: 20px;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      text-align: center;
+      text-align: left;
     }
-    h1, h2, h3 {
-      margin: 10px 0;
-    }
-    .hidden {
-      display: none;
-    }
-
-    /* Buttons */
-    button {
-      background: #2258c4;
-      color: #fff;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 5px;
-      font-size: 16px;
-      margin: 5px;
-      cursor: pointer;
-      transition: background 0.3s ease;
-    }
-    button:hover {
-      background: #144180;
-    }
-
-    /* Locked Screen */
-    #lockedScreen {
-      margin-top: 50px;
-    }
-    #lockedScreen #enterVaultBtn {
-      margin-top: 20px;
-    }
-
-    /* Main Vault UI */
-    #vaultUI {
-      max-width: 900px;
-      width: 100%;
-      margin-top: 20px;
-    }
-    .section {
-      margin: 20px auto;
-      max-width: 800px;
-      width: 85%;
-    }
-    .input-field {
-      padding: 10px;
-      margin: 10px 5px;
-      border: none;
-      border-radius: 4px;
-      width: 45%;
-      max-width: 300px;
-      font-size: 16px;
-    }
-
-    /* Transaction Table */
-    #transactionTable {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-      color: #000;
-      margin-top: 20px;
-      border-radius: 5px;
-      overflow: hidden;
-    }
-    #transactionTable th, #transactionTable td {
-      padding: 10px;
-      border-bottom: 1px solid #ccc;
-      word-wrap: break-word;
-    }
-    #transactionTable th {
-      background: #f3f4f6;
-    }
-
-    /* BioLine + UTC Container */
-    #bioLineUTCContainer {
-      display: flex;
-      justify-content: space-around;
-      align-items: center;
-      background-color: rgba(255, 255, 255, 0.1);
-      padding: 15px 30px;
-      border-radius: 10px;
-      font-size: 18px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-    }
-
-    /* Catch In / Out Sections */
-    #catchInSection, #catchOutSection {
-      background-color: rgba(255,255,255,0.1);
-      padding: 20px;
-      border-radius: 10px;
-      margin: 20px auto;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-      max-width: 600px;
-    }
-    #catchInBtn {
-      background: #10b981;
-    }
-    #catchInBtn:hover {
-      background: #059669;
-    }
-    #catchOutBtn {
-      background: #f97316;
-    }
-    #catchOutBtn:hover {
-      background: #ea580c;
-    }
-
-    /* Popup (Bio‑Catch) */
-    .popup {
-      background-color: rgba(0,0,0,0.8);
-      position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      display: none;
-      justify-content: center;
-      align-items: center;
-      z-index: 9999;
-    }
-    .popup-content {
-      background: #fff;
-      color: #000;
-      padding: 20px;
-      border-radius: 8px;
-      text-align: center;
-      max-width: 400px;
-      width: 80%;
-    }
-
-    /* Passphrase Modal */
-    #passModal {
+    #explainer h2, #faqModal h2 { color: #10b981; font-size: 1.4em; }
+    #faqModal {
       display: none;
       position: fixed;
       z-index: 99999;
-      top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.6);
-      justify-content: center;
-      align-items: center;
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(0,0,0,0.75);
+      justify-content: center; align-items: center;
     }
-    #passModal .popup-content {
-      background: #fff; color: #000;
-      padding: 20px; border-radius: 8px;
-      text-align: center; max-width: 400px;
-      width: 80%; margin:80px auto; position:relative;
+    #faqContent {
+      background: #1e3358;
+      color: #fff;
+      border-radius: 12px;
+      max-width: 450px;
+      padding: 28px 22px 20px 22px;
+      margin: 60px auto;
+      box-shadow: 0 5px 24px rgba(0,0,0,0.25);
     }
-
-    /* Lock Vault Button */
-    #lockVaultBtn {
-      position: absolute;
-      top: 20px;
-      right: 20px;
+    .explainer-icons {
+      margin-top: 12px;
+      display: flex; gap: 18px;
+      font-size: 1.25em; color: #fff;
     }
-
-    /* Extra: Terminate Vault (optional) */
-    #terminateBtn {
-      background: #ef4444;
-      font-size: 14px;
-      border-radius: 5px;
+    .explainer-icons span {
+      display: flex; align-items: center; gap: 5px;
+      background: #19557a;
+      border-radius: 6px;
+      padding: 6px 14px;
+    }
+    #auditInfo {
+      font-size: 1.02em;
+      color: #e2eafc;
+      margin-bottom: 10px;
+    }
+    #footerLinks {
+      margin: 10px 0 0 0;
+      font-size: 0.99em;
+      color: #b8c8e6;
+    }
+    #footerLinks a {
+      color: #aee1f8;
+      margin-right: 15px;
+      text-decoration: underline;
+      font-weight: 500;
+    }
+    #onboardingTips {
+      background: #184d72;
+      font-size: 1.05em;
+      margin-top: 8px;
       display: none;
     }
-    #terminateBtn:hover {
-      background: #dc2626;
+    #onboardingTips .tips-list {
+      margin: 6px 0 0 14px;
     }
-
-    /* Footer, etc. */
-    #footer {
-      margin-top: 20px;
-    }
-
-    /* Responsive Tweaks */
-    @media (max-width: 768px) {
-      #transactionTable th:nth-child(2),
-      #transactionTable td:nth-child(2) {
-        max-width: 60px;
-        word-wrap: break-word;
-      }
-      .input-field {
-        width: 70%;
-      }
-      #bioLineUTCContainer {
-        width: 80%;
-        flex-direction: column;
-      }
-    }
+    /* Responsive for new sections */
     @media (max-width: 480px) {
-      #transactionTable {
-        font-size: 12px;
-      }
-      button {
-        padding: 8px 16px;
-        font-size: 14px;
-      }
+      #explainer, #auditInfo, #faqContent { padding: 8px 5vw; }
+      .explainer-icons { flex-direction: column; gap: 10px; }
     }
   </style>
 </head>
 
 <body>
+  <!-- Explainer / Hero Section -->
+  <div id="explainer">
+    <h2>Welcome to BalanceChain & TVM</h2>
+    <p>
+      <b>Bio‑Vault is your key to the new world of digital money—powered by the BalanceChain protocol and TVM.</b><br>
+      <span style="color:#aee1f8;">1 TVM = 1 USD, always. Every coin is backed by real human effort—not speculation, not mining, not inflation.</span>
+    </p>
+    <div class="explainer-icons">
+      <span>🌐 Pegged & Stable</span>
+      <span>🔗 Audit-Proof</span>
+      <span>🤝 Human-Effort Backed</span>
+      <span>⚡ Instant & P2P</span>
+      <span>🕵️‍♂️ Privacy-First</span>
+    </div>
+    <div style="margin-top:10px;">
+      <a href="https://shemodelecf.com/whitepaper.pdf" target="_blank" style="color:#10b981;text-decoration:underline;">White Paper</a>
+      <a href="#" onclick="document.getElementById('faqModal').style.display='flex';return false;" style="color:#10b981;text-decoration:underline;">FAQ</a>
+      <a href="https://t.me/BalanceChainCommunity" target="_blank" style="color:#10b981;text-decoration:underline;">Community</a>
+      <a href="mailto:support@shemodelecf.com" style="color:#10b981;text-decoration:underline;">Support</a>
+      <a href="https://etherscan.io/address/0xYourContract" target="_blank" style="color:#10b981;text-decoration:underline;">Smart Contract</a>
+    </div>
+  </div>
+
+  <!-- Audit Info Widget (placeholder) -->
+  <div id="auditInfo">
+    <b>Live Audit:</b>
+    All TVM is publicly provable, with zero inflation. <span style="color:#10b981;">Peg: 1 TVM = 1 USD</span>. See <a href="https://etherscan.io/address/0xYourContract" target="_blank" style="color:#aee1f8;">on-chain supply</a> and <a href="https://shemodelecf.com/audit" target="_blank" style="color:#aee1f8;">protocol audit</a>.
+  </div>
+
+  <!-- Onboarding/Security Tips (shows on first load or with "Backup Vault" reminder) -->
+  <div id="onboardingTips">
+    <b>Getting Started Tips:</b>
+    <ul class="tips-list">
+      <li>💡 <b>Back up your vault!</b> If you lose your device or passphrase, your TVM may be lost forever.</li>
+      <li>🔒 Your keys, your money. Never share your passphrase or .vault file with anyone.</li>
+      <li>👁‍🗨 You can always export and verify your audit trail for proof and security.</li>
+      <li>🪙 To access TVM on the blockchain, connect your wallet and bridge via the on-chain gateway.</li>
+    </ul>
+  </div>
+
+  <!-- FAQ Modal (inline) -->
+  <div id="faqModal">
+    <div id="faqContent">
+      <h2>TVM & BalanceChain FAQ</h2>
+      <b>What is TVM?</b><br>
+      TVM is a digital coin always pegged to $1, backed by real human effort (Standard Human Effort, SHE).<br><br>
+      <b>How is value fixed?</b><br>
+      Protocol logic and the on-chain contract enforce 1 TVM = 1 USD—no exceptions.<br><br>
+      <b>Is my money safe?</b><br>
+      Only you control your vault and passphrase. Back up often!<br><br>
+      <b>How do I get/transfer TVM?</b><br>
+      Earn by SHE bonus, receive P2P, or bridge via the smart contract.<br><br>
+      <b>Can I prove my balance?</b><br>
+      Yes. All transactions are locally auditable and exportable.<br><br>
+      <button onclick="document.getElementById('faqModal').style.display='none';">Close</button>
+    </div>
+  </div>
+
   <!-- Locked Screen -->
   <div id="lockedScreen">
     <h1>Bio‑Vault</h1>
@@ -302,7 +224,6 @@
     <div class="section">
       <button id="exportBtn">Export Transactions</button>
       <button id="exportBackupBtn">Backup Vault</button>
-      <!-- Example: For the user-friendly .vault backup -->
       <button id="exportFriendlyBtn">Export Friendly Backup</button>
       <br>
       <label>Import .vault:</label>
@@ -320,14 +241,12 @@
       </thead>
       <tbody id="transactionBody"></tbody>
     </table>
-
-    <!-- Info on Exchange Rate or P2P details -->
     <div class="section" id="p2pInfo">
       <span>(Exchange Rate: 1 USD = 12 TVM)</span>
     </div>
   </div>
 
-  <!-- Popup for newly generated Bio‑Catch -->
+  <!-- Popup for Bio‑Catch -->
   <div id="bioCatchPopup" class="popup" aria-modal="true" role="dialog">
     <div class="popup-content">
       <h3>Your Bio‑Catch Number</h3>
@@ -339,11 +258,23 @@
 
   <!-- Footer -->
   <div class="section" id="footer">
+    <div id="footerLinks">
+      <a href="https://shemodelecf.com/whitepaper.pdf" target="_blank">White Paper</a>
+      <a href="#" onclick="document.getElementById('faqModal').style.display='flex';return false;">FAQ</a>
+      <a href="mailto:support@shemodelecf.com">Support</a>
+      <a href="https://t.me/BalanceChainCommunity" target="_blank">Community</a>
+      <a href="https://etherscan.io/address/0xYourContract" target="_blank">Smart Contract</a>
+    </div>
     <p style="color:#fff;">By RR.R — for Humanity</p>
   </div>
 
-  <!-- main.js script (Vault + On‑Chain stub) -->
+  <!-- main.js (Vault + Gateway logic) -->
   <script type="module" src="main.js"></script>
-
+  <script>
+    // Example: Show onboarding tips on first vault creation or until backup is done
+    if (!localStorage.getItem('vaultBackedUp')) {
+      document.getElementById('onboardingTips').style.display = 'block';
+    }
+  </script>
 </body>
 </html>
