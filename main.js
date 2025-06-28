@@ -1,10 +1,10 @@
 /*****************************************************************
  *  Bio-Vault – Advanced, Deduplicated, Production Build
- *  (merged & verified 2025-06-28)
+ *  Merged 2025-06-28
  *****************************************************************/
 
-/*───────────────── 1. GLOBAL CONSTANTS ─────────────────*/
-const DB_NAME = 'BioVaultDB', DB_VERSION = 1, STORE = 'vault';
+/*──────────────────────────── 1. GLOBAL CONSTANTS ────────────────────────────*/
+const DB_NAME      = 'BioVaultDB', DB_VERSION = 1, STORE = 'vault';
 
 const INITIAL_BALANCE_TVM   = 1200;
 const PER_TX_BONUS          = 120;
@@ -14,18 +14,18 @@ const MAX_BONUS_YEAR_TVM    = 10800;
 
 const EXCHANGE_RATE         = 12;          // 1 USD = 12 TVM
 const INITIAL_BIO_CONSTANT  = 1736565605;  // genesis epoch
-const LOCKOUT_SECS          = 3600;        // 1 h
+const LOCKOUT_SECS          = 3600;        // vault lockout
 const MAX_AUTH_TRIES        = 3;
 
 const BACKUP_KEY            = 'vaultArmoredBackup';
-const STORAGE_CHECK_MS      = 300_000;     // 5 min
+const STORAGE_CHECK_MS      = 300_000;
 
 const SYNC_CH               = new BroadcastChannel('vault-sync');
 
-/*───────────────── 2. RUNTIME STATE ─────────────────*/
-let derivedKey = null;
-let vaultOpen  = false;
-let utcTimerId = null;
+/*──────────────────────────── 2. RUNTIME STATE ───────────────────────────────*/
+let derivedKey  = null;
+let vaultOpen   = false;
+let utcTimerId  = null;
 
 const VD = {
   signingKey : { privateKeyJwk:null, publicKeyJwk:null },
@@ -47,10 +47,10 @@ const VD = {
   userWallet:'', nextBonusId:1
 };
 
-/*───────────────── 3. BASIC HELPERS ─────────────────*/
+/*──────────────────────────── 3. BASIC HELPERS ───────────────────────────────*/
 const enc = new TextEncoder(), dec = new TextDecoder();
-const b64 = { enc:buf=>btoa(String.fromCharCode(...new Uint8Array(buf))),
-              dec:str=>Uint8Array.from(atob(str),c=>c.charCodeAt(0)) };
+const b64 = { enc:b=>btoa(String.fromCharCode(...new Uint8Array(b))),
+              dec:s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0)) };
 const sha256 = async s => {
   const h=await crypto.subtle.digest('SHA-256',enc.encode(s));
   return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('');
@@ -58,7 +58,7 @@ const sha256 = async s => {
 const num = n=>n.toLocaleString();
 const fmt = t=>new Date(t*1000).toISOString().replace('T',' ').slice(0,19);
 
-/*───────────────── 4. CRYPTO PRIMITIVES ─────────────────*/
+/*──────────────────────────── 4. CRYPTO PRIMITIVES ───────────────────────────*/
 async function genECDSA(){
   const kp=await crypto.subtle.generateKey(
     {name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
@@ -84,14 +84,14 @@ async function verifySig(pub,msg,sig64){
 const makeBioIBAN = async (pub,ts)=>
   'BIO'+(await sha256(JSON.stringify(pub)+'|'+ts+'|'+INITIAL_BIO_CONSTANT)).slice(0,32).toUpperCase();
 
-/*───────────────── 5. AES-GCM + IndexedDB ─────────────────*/
+/*────────────────────── 5. AES-GCM + IndexedDB (single impl.) ────────────────*/
 async function aesEncrypt(key,obj){
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,enc.encode(JSON.stringify(obj)));
   return {iv,ct};
 }
 const aesDecrypt=(key,iv,ct)=>
-  crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct).then(buf=>JSON.parse(dec.decode(buf)));
+  crypto.subtle.decrypt({name:'AES-GCM',iv},key,ct).then(b=>JSON.parse(dec.decode(b)));
 
 function openDB(){
   return new Promise((ok,no)=>{
@@ -129,7 +129,7 @@ async function deriveAes(pin,salt){
     km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
 
-/*───────────────── 6. SEGMENT ─────────────────*/
+/*──────────────────────────── 6. BALANCE SEGMENT ─────────────────────────────*/
 class Segment{
   constructor({amt,ownerKey,ts}){
     this.amount=amt;
@@ -146,40 +146,42 @@ class Segment{
   }
 }
 
-/*───────────────── 7. PASS-PHRASE MODAL ─────────────────*/
+/*──────────────────────────── 7. PASS-PHRASE MODAL ──────────────────────────*/
 async function askPass(confirm=false,title='Enter Pass'){
   return new Promise(done=>{
     const mdl=document.getElementById('passModal');
     mdl.style.display='block';
     document.getElementById('passModalTitle').textContent=title;
-    const pinI=document.getElementById('passModalInput');
-    const pinC=document.getElementById('passModalConfirmInput');
-    pinI.value=''; pinC.value='';
+    const p1=document.getElementById('passModalInput');
+    const p2=document.getElementById('passModalConfirmInput');
+    p1.value=''; p2.value='';
     document.getElementById('passModalConfirmLabel').style.display=confirm?'block':'none';
     const ok=()=>{
-      const p=pinI.value.trim();
-      if(p.length<8) return alert('≥ 8 chars');
-      if(confirm && p!==pinC.value.trim()) return alert('Mismatch');
-      end(); done(p);
+      const pin=p1.value.trim();
+      if(pin.length<8) return alert('≥ 8 chars');
+      if(confirm && pin!==p2.value.trim()) return alert('Mismatch');
+      end(); done(pin);
     };
-    const cancel=()=>{end(); done(null);};
-    function end(){mdl.style.display='none';okBtn.removeEventListener('click',ok);noBtn.removeEventListener('click',cancel);}
-    const okBtn=document.getElementById('passModalSaveBtn');
-    const noBtn=document.getElementById('passModalCancelBtn');
-    okBtn.addEventListener('click',ok); noBtn.addEventListener('click',cancel);
+    const cancel=()=>{end(); done(null);}
+    function end(){mdl.style.display='none';b1.removeEventListener('click',ok);b2.removeEventListener('click',cancel);}
+    const b1=document.getElementById('passModalSaveBtn');
+    const b2=document.getElementById('passModalCancelBtn');
+    b1.addEventListener('click',ok); b2.addEventListener('click',cancel);
   });
 }
 
-/*───────────────── 8. VAULT CREATION ─────────────────*/
+/*──────────────────────────── 8. VAULT CREATION ─────────────────────────────*/
 async function createVault(){
   const pin=await askPass(true,'Create Vault'); if(!pin) return;
+
   VD.joinTimestamp = VD.lastUTCTimestamp = Math.floor(Date.now()/1000);
   VD.initialBioConstant = INITIAL_BIO_CONSTANT;
   VD.bonusConstant = VD.joinTimestamp - INITIAL_BIO_CONSTANT;
+
   VD.signingKey = await genECDSA();
   VD.bioIBAN    = await makeBioIBAN(VD.signingKey.publicKeyJwk,VD.joinTimestamp);
 
-  try{
+  try{                                     // WebAuthn (best-effort)
     const cred=await navigator.credentials.create({
       publicKey:{
         challenge:crypto.getRandomValues(new Uint8Array(32)),
@@ -188,9 +190,8 @@ async function createVault(){
         pubKeyCredParams:[{type:'public-key',alg:-7}],
         authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},
         attestation:'none'
-      }});
-    VD.credentialId=b64.enc(cred.rawId);
-  }catch{ VD.credentialId='SW-'+Date.now(); } // fallback if WebAuthn unavailable
+      }}); VD.credentialId=b64.enc(cred.rawId);
+  }catch{ VD.credentialId='SW-'+Date.now(); }          // fallback if unavailable
 
   const salt=crypto.getRandomValues(new Uint8Array(16));
   derivedKey=await deriveAes(pin,salt);
@@ -200,16 +201,15 @@ async function createVault(){
   vaultOpen=true; renderUI(); startUtcTicker();
 }
 
-/*───────────────── 9. VAULT UNLOCK  ─────────────────*/
+/*──────────────────────────── 9. VAULT UNLOCK ───────────────────────────────*/
 async function unlockFlow(){
   const stored=await loadVault();
   if(!stored) return createVault();
 
   if(stored.lockoutTimestamp && Date.now()/1000 < stored.lockoutTimestamp)
-    return alert('Locked. Try later');
+    return alert('Locked – wait a bit');
 
   const pin=await askPass(false,'Unlock Vault'); if(!pin) return;
-
   try{
     derivedKey=await deriveAes(pin,b64.dec(stored.salt));
     Object.assign(VD, await aesDecrypt(derivedKey,b64.dec(stored.iv),b64.dec(stored.ct)));
@@ -220,11 +220,10 @@ async function unlockFlow(){
             allowCredentials:VD.credentialId.startsWith('SW-')?[]:
               [{id:b64.dec(VD.credentialId),type:'public-key'}],
             userVerification:'required'}});
-    }catch{/* non-fatal if fallback */}
+    }catch{/* ignore if fallback */}
 
     VD.authAttempts=0; VD.lockoutTimestamp=null;
-    const {iv,ct}=await aesEncrypt(derivedKey,VD);
-    await saveVault(iv,ct,stored.salt);
+    const {iv,ct}=await aesEncrypt(derivedKey,VD); await saveVault(iv,ct,stored.salt);
 
     vaultOpen=true; renderUI(); startUtcTicker();
   }catch{
@@ -237,7 +236,7 @@ async function unlockFlow(){
   }
 }
 
-/*─────────────────10. PERSIST (helper) ─────────────────*/
+/*──────────────────────────── 10. PERSIST (helper) ──────────────────────────*/
 async function persist(){
   const {iv,ct}=await aesEncrypt(derivedKey,VD);
   const salt=(await loadVault()).salt;
@@ -245,48 +244,45 @@ async function persist(){
   SYNC_CH.postMessage({type:'vaultUpdate',payload:{iv:b64.enc(iv),data:b64.enc(ct)}});
 }
 
-/*─────────────────11. TRANSACTIONS ─────────────────*/
+/*──────────────────────────── 11. TRANSACTIONS ──────────────────────────────*/
 async function sendTx(){
   if(!vaultOpen) return alert('Unlock first');
   const to=document.getElementById('receiverBioIBAN').value.trim();
   const amt=+document.getElementById('catchOutAmount').value;
-  if(!to||amt<=0) return alert('Invalid');
+  if(!to||amt<=0) return alert('Invalid send');
   const now=Math.floor(Date.now()/1000);
 
   const seg=new Segment({amt,ownerKey:VD.signingKey.publicKeyJwk,ts:now});
   await seg.init(); await seg.spend(now);
-
-  VD.transactions.push({type:'sent',amount:amt,timestamp:now,
-                        receiverBioIBAN:to,chainId:seg.chainId,spentProof:seg.spentProof});
-  await persist(); renderTx(); updateBalances();
+  VD.transactions.push({
+    type:'sent',amount:amt,timestamp:now,receiverBioIBAN:to,
+    chainId:seg.chainId,spentProof:seg.spentProof});
+  await persist(); renderTx(); updateBal();
   alert('Share Bio-Catch:\n'+seg.chainId+'|'+seg.spentProof);
 }
 
 async function receiveTx(){
   if(!vaultOpen) return alert('Unlock first');
   const bc=prompt('Paste Bio-Catch (chainId|spentProof)'); if(!bc) return;
-  const [id,spent]=bc.split('|'), amt=+prompt('Amount (TVM)');
+  const [id,spent]=bc.split('|'); const amt=+prompt('Amount (TVM)');
   if(!id||!spent||!amt) return alert('Bad data');
   const now=Math.floor(Date.now()/1000);
 
   const seg=new Segment({amt,ownerKey:VD.signingKey.publicKeyJwk,ts:now});
   seg.chainId=id; seg.spentProof=spent; await seg.claim(VD.signingKey.publicKeyJwk,now);
-
-  VD.transactions.push({type:'received',amount:amt,timestamp:now,
-                        senderBioIBAN:'Unknown',chainId:id,
-                        ownershipProof:seg.ownershipProof,receiverSignature:seg.recvSig});
-  await persist(); renderTx(); updateBalances();
+  VD.transactions.push({
+    type:'received',amount:amt,timestamp:now,senderBioIBAN:'Unknown',
+    chainId:id,ownershipProof:seg.ownershipProof,receiverSignature:seg.recvSig});
+  await persist(); renderTx(); updateBal();
   alert('Received & claimed');
 }
 
-/*─────────────────12. BACKUP / IMPORT / CSV / COPY IBAN ─────────────────*/
+/*──────────────────────────── 12. EXPORT / IMPORT / COPY ────────────────────*/
 function exportBackup(){
   const blob=new Blob([JSON.stringify(VD,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url; a.download='vault_backup.json';
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
+  const a=document.createElement('a'); a.href=url; a.download='vault_backup.json';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 function exportCSV(){
   const rows=[['Bio-IBAN','ChainId/Bio-Catch','Amount','Timestamp','Type']];
@@ -294,9 +290,7 @@ function exportCSV(){
     rows.push([
       t.type==='sent'?t.receiverBioIBAN:t.senderBioIBAN||'',
       t.chainId||t.bioCatch||'',
-      t.amount,
-      fmt(t.timestamp),
-      t.type
+      t.amount, fmt(t.timestamp), t.type
     ]);
   });
   const csv='data:text/csv;charset=utf-8,'+rows.map(r=>r.join(',')).join('\r\n');
@@ -307,15 +301,13 @@ async function importBackup(file){
   try{
     Object.assign(VD, JSON.parse(await file.text()));
     await persist();
-    alert('Vault imported. Unlock with your pass-phrase next time.');
+    alert('Backup imported. Unlock with your pass-phrase.');
   }catch{ alert('Bad backup file'); }
 }
-function copyIBAN(){
-  if(!VD.bioIBAN) return alert('No IBAN yet');
-  navigator.clipboard.writeText(VD.bioIBAN).then(()=>alert('Copied'));
-}
+const copyIBAN=()=>navigator.clipboard.writeText(VD.bioIBAN||'')
+  .then(()=>alert('IBAN copied'));
 
-/*─────────────────13. RENDERING ─────────────────*/
+/*──────────────────────────── 13. RENDERING ────────────────────────────────*/
 function renderTx(){
   const tb=document.getElementById('transactionBody'); tb.innerHTML='';
   [...VD.transactions].sort((a,b)=>b.timestamp-a.timestamp)
@@ -326,7 +318,7 @@ function renderTx(){
           <td>${fmt(t.timestamp)}</td>
           <td>${t.type}</td></tr>`));
 }
-function updateBalances(){
+function updateBal(){
   const rx=VD.transactions.filter(x=>x.type==='received').reduce((s,t)=>s+t.amount,0);
   const sx=VD.transactions.filter(x=>x.type==='sent').reduce((s,t)=>s+t.amount,0);
   VD.balanceTVM=VD.initialBalanceTVM+rx-sx;
@@ -338,7 +330,7 @@ function renderUI(){
   document.getElementById('lockedScreen').classList.add('hidden');
   document.getElementById('vaultUI').classList.remove('hidden');
   document.getElementById('bioibanInput').value=VD.bioIBAN||'';
-  renderTx(); updateBalances();
+  renderTx(); updateBal();
 }
 function startUtcTicker(){
   if(utcTimerId) clearInterval(utcTimerId);
@@ -349,12 +341,12 @@ function startUtcTicker(){
   },1000);
 }
 
-/*─────────────────14. DOM READY ─────────────────*/
+/*──────────────────────────── 14. DOM READY ───────────────────────────────*/
 window.addEventListener('DOMContentLoaded',()=>{
   /* core buttons */
-  document.getElementById('enterVaultBtn').addEventListener('click',unlockFlow);
-  document.getElementById('catchOutBtn') .addEventListener('click',sendTx);
-  document.getElementById('catchInBtn')  .addEventListener('click',receiveTx);
+  document.getElementById('enterVaultBtn') .addEventListener('click',unlockFlow);
+  document.getElementById('catchOutBtn')  .addEventListener('click',sendTx);
+  document.getElementById('catchInBtn')   .addEventListener('click',receiveTx);
 
   /* extras */
   document.getElementById('copyBioIBANBtn') ?.addEventListener('click',copyIBAN);
@@ -363,6 +355,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   document.getElementById('importVaultFileInput')
     ?.addEventListener('change',e=>e.target.files[0]&&importBackup(e.target.files[0]));
 
+  /* wallet save / auto-connect */
   document.getElementById('saveWalletBtn')?.addEventListener('click',async()=>{
     if(VD.userWallet) return alert('Wallet already set');
     const addr=document.getElementById('userWalletAddress').value.trim();
@@ -377,20 +370,21 @@ window.addEventListener('DOMContentLoaded',()=>{
     else alert('Wallet already set');
   });
 
-  /* storage quota warnings */
+  /* storage quota warn */
   if(navigator.storage?.persist){
     navigator.storage.persisted().then(p=>{ if(!p) navigator.storage.persist(); });
     setInterval(()=>navigator.storage.estimate().then(est=>{
-      if(est&&est.quota&&est.usage/est.quota>0.85) alert('Storage nearly full'); }),STORAGE_CHECK_MS);
+      if(est&&est.quota&&est.usage/est.quota>0.85) alert('Storage nearly full'); }),
+      STORAGE_CHECK_MS);
   }
 
   /* broadcast-channel sync */
-  SYNC_CH.onmessage=async e=>{
+  SYNC_CH.onmessage = async e=>{
     if(e.data?.type!=='vaultUpdate'||!derivedKey) return;
     const {iv,data}=e.data.payload;
-    Object.assign(VD, await aesDecrypt(derivedKey,b64.dec(iv),b64.dec(data)));
-    if(vaultOpen){renderTx();updateBalances();}
+    Object.assign(VD,await aesDecrypt(derivedKey,b64.dec(iv),b64.dec(data)));
+    if(vaultOpen){renderTx();updateBal();}
   };
 });
 
-console.log('🎯 Bio-Vault loaded — production build (no duplicates)');
+console.log('🎯 Bio-Vault loaded – production build (no duplicates)');
