@@ -5,7 +5,6 @@ const DB_NAME = 'BioVaultDB';
 const DB_VERSION = 1;
 const VAULT_STORE = 'vault';
 
-// Vault & Bonus Limits
 const INITIAL_BALANCE_TVM = 1200;
 const PER_TX_BONUS = 120;
 const MAX_BONUSES_PER_DAY = 3;
@@ -18,7 +17,6 @@ const TRANSACTION_VALIDITY_SECONDS = 720; // ±12 minutes
 const LOCKOUT_DURATION_SECONDS = 3600;   // 1 hour
 const MAX_AUTH_ATTEMPTS = 3;
 
-// IDB & Storage
 const VAULT_BACKUP_KEY = 'vaultArmoredBackup';
 const STORAGE_CHECK_INTERVAL = 300000; // 5 min
 const vaultSyncChannel = new BroadcastChannel('vault-sync');
@@ -26,13 +24,21 @@ const vaultSyncChannel = new BroadcastChannel('vault-sync');
 let vaultUnlocked = false;
 let derivedKey = null;
 let bioLineIntervalTimer = null;
-let transactionLock = false;
 
 /**
- * Master vaultData. userWallet => for on-chain bridging.
+ * Master vaultData structure; stored encrypted in IndexedDB/localStorage.
  */
 let vaultData = {
+  // Device-specific ECDSA keypair (JWK), generated at vault creation
+  signingKey: {
+    privateKeyJwk: null,
+    publicKeyJwk: null
+  },
+
+  // Bio-IBAN, derived from publicKeyJwk + joinTimestamp
   bioIBAN: null,
+
+  // Standard vault fields
   initialBioConstant: 0,
   bonusConstant: 0,
   initialBalanceTVM: INITIAL_BALANCE_TVM,
@@ -44,15 +50,619 @@ let vaultData = {
   lockoutTimestamp: null,
   joinTimestamp: 0,
   lastTransactionHash: '',
-  credentialId: null,   // Tied to biometric
+  credentialId: null,   // WebAuthn rawId (base64)
   finalChainHash: '',
-  dailyCashback: { date:'', usedCount:0 },
-  monthlyUsage: { yearMonth:'', usedCount:0 },
+  dailyCashback: { date: '', usedCount: 0 },
+  monthlyUsage: { yearMonth: '', usedCount: 0 },
   annualBonusUsed: 0,
-
-  userWallet: "",        // On-chain wallet address (once saved, cannot change)
+  userWallet: "",        // On-chain wallet address (immutable once set)
   nextBonusId: 1
 };
+
+/******************************
+ * Crypto Utilities
+ ******************************/
+// SHA256 hashing
+async function sha256(str) {
+  const buf = new TextEncoder().encode(str);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// ECDSA-P256 keypair generation
+async function generateEcdsaKeyPair() {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify']
+  );
+  const privateKeyJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+  const publicKeyJwk  = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+  return { privateKeyJwk, publicKeyJwk };
+}
+
+// Sign an arbitrary message with the vault's private key
+async function signWithDeviceKey(message) {
+  const msgBuf = new TextEncoder().encode(message);
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    vaultData.signingKey.privateKeyJwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    privateKey,
+    msgBuf
+  );
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+}
+
+// Verify a signature with a given public key JWK
+async function verifySignatureWithKey(publicKeyJwk, message, signatureB64) {
+  const msgBuf = new TextEncoder().encode(message);
+  const sigBuf = Uint8Array.from(atob(signatureB64), c => c.charCodeAt(0));
+  const publicKey = await crypto.subtle.importKey(
+    'jwk',
+    publicKeyJwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify']
+  );
+  return crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    publicKey,
+    sigBuf,
+    msgBuf
+  );
+}
+
+// Derive the Bio-IBAN from the public key and join timestamp
+async function generateBioIBAN(publicKeyJwk, joinTimestamp) {
+  const data = JSON.stringify(publicKeyJwk) + '|' + joinTimestamp + '|' + INITIAL_BIO_CONSTANT;
+  const hash = await sha256(data);
+  // Prefix with "BIO" and take first 32 chars for brevity
+  return 'BIO' + hash.slice(0, 32).toUpperCase();
+}
+
+/******************************
+ * BalanceChain Segment Logic
+ ******************************/
+class BalanceSegment {
+  constructor({ amount, ownerKeyJwk, ownerTS }) {
+    this.amount = amount;
+    this.ownershipChangeCount = 0;
+    this.originalOwnerKeyJwk = ownerKeyJwk;
+    this.originalOwnerTS = ownerTS;
+    this.originalBioConst = INITIAL_BIO_CONSTANT + (ownerTS - ownerTS);
+    this.previousOwnerKeyJwk = null;
+    this.previousOwnerTS = null;
+    this.previousBioConst = this.originalBioConst;
+    this.currentOwnerKeyJwk = ownerKeyJwk;
+    this.currentOwnerTS = ownerTS;
+    this.currentBioConst = this.originalBioConst;
+    this.chainId = null;
+    this.spentProof = null;
+    this.ownershipProof = null;
+    this.unlockProof = null;
+    this.receiverSignature = null;  // New: ECDSA signature by receiver
+  }
+
+  computeBioConst(nowTS) {
+    return INITIAL_BIO_CONSTANT + (nowTS - this.originalOwnerTS);
+  }
+
+  /** Initialize chain ID for this segment */
+  async computeChainId() {
+    const data = `${this.originalBioConst}|${this.amount}|${this.originalOwnerTS}`;
+    this.chainId = await sha256(data);
+  }
+
+  /** Compute proofs after each ownership change */
+  async computeProofs() {
+    const base = [
+      this.originalBioConst,
+      this.previousBioConst,
+      this.currentBioConst,
+      this.amount,
+      this.ownershipChangeCount,
+      this.currentOwnerTS
+    ].join('|');
+    this.ownershipProof = await sha256(base);
+    this.unlockProof = await sha256(base + '|UNLOCK');
+  }
+
+  /** Spend: move from sender to receiver; generate spentProof */
+  async spend(nowTS) {
+    this.previousOwnerKeyJwk = this.currentOwnerKeyJwk;
+    this.previousOwnerTS     = this.currentOwnerTS;
+    this.previousBioConst    = this.currentBioConst;
+    this.currentOwnerTS      = nowTS;
+    this.currentBioConst     = this.computeBioConst(nowTS);
+    this.ownershipChangeCount++;
+    const spentBase = [
+      this.originalBioConst,
+      this.previousBioConst,
+      this.amount,
+      this.ownershipChangeCount,
+      this.currentOwnerTS
+    ].join('|');
+    this.spentProof = await sha256(spentBase + '|SPENT');
+    await this.computeProofs();
+  }
+
+  /** Claim: receiver accepts; sign segment to bind to their key */
+  async claim(receiverKeyJwk, nowTS) {
+    this.currentOwnerKeyJwk = receiverKeyJwk;
+    this.currentOwnerTS     = nowTS;
+    this.currentBioConst    = this.computeBioConst(nowTS);
+    this.ownershipChangeCount++;
+    await this.computeProofs();
+
+    // Sign by receiver to finalize transfer
+    const payload = [
+      this.chainId,
+      this.currentOwnerTS,
+      this.currentBioConst,
+      this.ownershipProof
+    ].join('|');
+    this.receiverSignature = await signWithDeviceKey(payload);
+  }
+
+  /** Verify that receiverSignature is valid for this segment */
+  async verifyReceiverSignature() {
+    const payload = [
+      this.chainId,
+      this.currentOwnerTS,
+      this.currentBioConst,
+      this.ownershipProof
+    ].join('|');
+    return verifySignatureWithKey(this.currentOwnerKeyJwk, payload, this.receiverSignature);
+  }
+}
+
+/******************************
+ * Encryption & IndexedDB
+ ******************************/
+async function encryptData(key, dataObj) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(dataObj));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    plaintext
+  );
+  return { iv, ciphertext };
+}
+
+async function decryptData(key, iv, ciphertext) {
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    ciphertext
+  );
+  return JSON.parse(new TextDecoder().decode(plainBuf));
+}
+
+function bufferToBase64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function base64ToBuffer(b64) {
+  const bin = atob(b64);
+  return Uint8Array.from(bin, c => c.charCodeAt(0));
+}
+
+async function openVaultDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(VAULT_STORE)) {
+        db.createObjectStore(VAULT_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = e => resolve(e.target.result);
+    req.onerror = e => reject(e.target.error);
+  });
+}
+
+async function saveVaultDataToDB(iv, ciphertext, saltB64) {
+  const db = await openVaultDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(VAULT_STORE, 'readwrite');
+    tx.objectStore(VAULT_STORE).put({
+      id: 'vaultData',
+      iv: bufferToBase64(iv),
+      ciphertext: bufferToBase64(ciphertext),
+      salt: saltB64,
+      authAttempts: vaultData.authAttempts,
+      lockoutTimestamp: vaultData.lockoutTimestamp
+    });
+    tx.oncomplete = () => res();
+    tx.onerror = err => rej(err);
+  });
+}
+
+async function loadVaultDataFromDB() {
+  const db = await openVaultDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(VAULT_STORE, 'readonly');
+    const getReq = tx.objectStore(VAULT_STORE).get('vaultData');
+    getReq.onsuccess = () => {
+      const result = getReq.result;
+      if (!result) return res(null);
+      try {
+        res({
+          iv: base64ToBuffer(result.iv),
+          ciphertext: base64ToBuffer(result.ciphertext),
+          salt: base64ToBuffer(result.salt),
+          authAttempts: result.authAttempts,
+          lockoutTimestamp: result.lockoutTimestamp
+        });
+      } catch {
+        res(null);
+      }
+    };
+    getReq.onerror = err => rej(err);
+  });
+}
+
+/******************************
+ * Key Derivation
+ ******************************/
+async function deriveKeyFromPIN(pin, salt) {
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(pin),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', salt, iterations:100000, hash:'SHA-256' },
+    keyMaterial,
+    { name:'AES-GCM', length:256 },
+    false,
+    ['encrypt','decrypt']
+  );
+}
+
+/******************************
+ * Vault Creation & Unlock
+ ******************************/
+async function promptPassphrase(confirmNeeded = false, title = 'Enter Passphrase') {
+  return new Promise(res => {
+    const modal = document.getElementById('passModal');
+    document.getElementById('passModalTitle').textContent = title;
+    document.getElementById('passModalInput').value = '';
+    document.getElementById('passModalConfirmInput').value = '';
+    document.getElementById('passModalConfirmLabel')
+      .style.display = confirmNeeded ? 'block' : 'none';
+
+    const onSave = () => {
+      const pin = document.getElementById('passModalInput').value.trim();
+      const confirm = document.getElementById('passModalConfirmInput').value.trim();
+      if (pin.length < 8) return alert('Passphrase ≥ 8 chars');
+      if (confirmNeeded && pin !== confirm) return alert('Passphrases do not match');
+      cleanup();
+      res(pin);
+    };
+    const onCancel = () => { cleanup(); res(null); };
+
+    function cleanup() {
+      document.getElementById('passModalSaveBtn').removeEventListener('click', onSave);
+      document.getElementById('passModalCancelBtn').removeEventListener('click', onCancel);
+      modal.style.display = 'none';
+    }
+
+    document.getElementById('passModalSaveBtn').addEventListener('click', onSave);
+    document.getElementById('passModalCancelBtn').addEventListener('click', onCancel);
+    modal.style.display = 'block';
+  });
+}
+
+async function createNewVault() {
+  const pin = await promptPassphrase(true, 'Create New Vault');
+  if (!pin) return;
+
+  // Initialize vault data
+  vaultData.joinTimestamp = Math.floor(Date.now() / 1000);
+  vaultData.lastUTCTimestamp = vaultData.joinTimestamp;
+  vaultData.initialBioConstant = INITIAL_BIO_CONSTANT;
+  vaultData.bonusConstant = vaultData.joinTimestamp - INITIAL_BIO_CONSTANT;
+  vaultData.transactions = [];
+  vaultData.authAttempts = 0;
+  vaultData.lockoutTimestamp = null;
+
+  // Generate ECDSA keypair for signing
+  const { privateKeyJwk, publicKeyJwk } = await generateEcdsaKeyPair();
+  vaultData.signingKey = { privateKeyJwk, publicKeyJwk };
+
+  // Derive device credential (WebAuthn) for extra biometric lock
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: 'Bio-Vault' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'user', displayName: 'User' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+      attestation: 'none'
+    }
+  });
+  vaultData.credentialId = bufferToBase64(cred.rawId);
+
+  // Compute Bio-IBAN from publicKeyJwk
+  vaultData.bioIBAN = await generateBioIBAN(publicKeyJwk, vaultData.joinTimestamp);
+
+  // Derive symmetric key & save vault
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  derivedKey = await deriveKeyFromPIN(pin, salt);
+  const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
+  await saveVaultDataToDB(iv, ciphertext, bufferToBase64(salt));
+
+  vaultUnlocked = true;
+  showVaultUI();
+  initializeBioLine();
+}
+
+async function unlockVault() {
+  const stored = await loadVaultDataFromDB();
+  if (!stored) return createNewVault();
+
+  // Handle lockout
+  if (stored.lockoutTimestamp) {
+    const now = Math.floor(Date.now() / 1000);
+    if (now < stored.lockoutTimestamp) {
+      const m = Math.ceil((stored.lockoutTimestamp - now) / 60);
+      return alert(`Vault locked. Try again in ${m} min`);
+    }
+  }
+
+  const pin = await promptPassphrase(false, 'Unlock Vault');
+  if (!pin) return;
+
+  try {
+    derivedKey = await deriveKeyFromPIN(pin, stored.salt);
+    const data = await decryptData(derivedKey, stored.iv, stored.ciphertext);
+    Object.assign(vaultData, data);
+
+    // Biometric assertion
+    const ok = await navigator.credentials.get({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: base64ToBuffer(vaultData.credentialId), type: 'public-key' }],
+        userVerification: 'required'
+      }
+    });
+    if (!ok) throw new Error('Biometric check failed');
+
+    // Update lockout counters
+    vaultData.authAttempts = 0;
+    vaultData.lockoutTimestamp = null;
+    await promptAndSaveVault();
+
+    vaultUnlocked = true;
+    showVaultUI();
+    initializeBioLine();
+  } catch (err) {
+    vaultData.authAttempts++;
+    if (vaultData.authAttempts >= MAX_AUTH_ATTEMPTS) {
+      vaultData.lockoutTimestamp = Math.floor(Date.now() / 1000) + LOCKOUT_DURATION_SECONDS;
+      alert('Too many attempts. Locked for 1 hour.');
+    } else {
+      alert(`Unlock failed. ${MAX_AUTH_ATTEMPTS - vaultData.authAttempts} tries left.`);
+    }
+    await promptAndSaveVault();
+  }
+}
+
+async function checkAndUnlockVault() {
+  await unlockVault();
+}
+
+/******************************
+ * JSON Backup / Recovery
+ ******************************/
+async function promptAndSaveVault(salt = null) {
+  const { iv, ciphertext } = await encryptData(derivedKey, vaultData);
+  const saltB64 = salt ? bufferToBase64(salt) : (await loadVaultDataFromDB()).salt;
+  await saveVaultDataToDB(iv, ciphertext, saltB64);
+}
+
+async function exportVaultBackup() {
+  const blob = new Blob([JSON.stringify(vaultData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'vault_backup.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importVaultBackupFromFile(file) {
+  try {
+    const txt = await file.text();
+    Object.assign(vaultData, JSON.parse(txt));
+    await promptAndSaveVault();
+    alert('Vault restored from backup.');
+    showVaultUI();
+  } catch {
+    alert('Invalid backup file.');
+  }
+}
+
+/******************************
+ * Transactions & Segments
+ ******************************/
+async function handleSendTransaction() {
+  if (!vaultUnlocked) return alert('Unlock vault first');
+  const toIBAN = document.getElementById('receiverBioIBAN').value.trim();
+  const amount = Number(document.getElementById('catchOutAmount').value);
+  if (!toIBAN || !amount || amount <= 0) return alert('Invalid send details');
+
+  const now = Math.floor(Date.now() / 1000);
+
+  // 1) Create segment, spend it
+  const segment = new BalanceSegment({
+    amount,
+    ownerKeyJwk: vaultData.signingKey.publicKeyJwk,
+    ownerTS: now
+  });
+  await segment.computeChainId();
+  await segment.spend(now);
+  // spentProof ensures removal from sender
+
+  // 2) Record sent tx
+  const tx = {
+    type: 'sent',
+    amount,
+    timestamp: now,
+    receiverBioIBAN: toIBAN,
+    bioCatch: null, // filled after claim
+    spentProof: segment.spentProof,
+    chainId: segment.chainId
+  };
+  vaultData.transactions.push(tx);
+  await promptAndSaveVault();
+
+  alert('Send initiated. Share the Bio-Catch below with receiver to complete:');
+  showBioCatchPopup(segment.chainId + '|' + segment.spentProof);
+}
+
+async function handleReceiveTransaction() {
+  if (!vaultUnlocked) return alert('Unlock vault first');
+  const enc = prompt('Paste received Bio-Catch:'); // e.g. chainId|spentProof
+  if (!enc) return;
+  const [chainId, spentProof] = enc.split('|');
+  const amount = Number(prompt('Amount (TVM)')); 
+  const now = Math.floor(Date.now() / 1000);
+
+  // Find corresponding sent tx
+  const sentTx = vaultData.transactions.find(t =>
+    t.chainId === chainId && t.spentProof === spentProof && t.type === 'sent'
+  );
+  if (!sentTx) return alert('No matching send found');
+
+  // 1) Create segment object to claim
+  const segment = new BalanceSegment({
+    amount,
+    ownerKeyJwk: vaultData.signingKey.publicKeyJwk,
+    ownerTS: now
+  });
+  segment.chainId = chainId;
+  segment.spentProof = spentProof;
+  await segment.claim(vaultData.signingKey.publicKeyJwk, now);
+  // receiverSignature now binds segment
+
+  // 2) Record receive tx
+  const rx = {
+    type: 'received',
+    amount,
+    timestamp: now,
+    senderBioIBAN: sentTx.receiverBioIBAN,
+    bioCatch: enc,
+    ownershipProof: segment.ownershipProof,
+    receiverSignature: segment.receiverSignature,
+    chainId
+  };
+  vaultData.transactions.push(rx);
+  await promptAndSaveVault();
+
+  alert('Receive complete. Segment securely claimed.');
+}
+
+/******************************
+ * UI Rendering & Helpers
+ ******************************/
+function formatDisplayDate(ts) {
+  const d = new Date(ts * 1000);
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+function formatWithCommas(n) {
+  return n.toLocaleString();
+}
+
+function renderTransactionTable() {
+  const tbody = document.getElementById('transactionBody');
+  tbody.innerHTML = '';
+  [...vaultData.transactions]
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .forEach(tx => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${tx.type === 'sent' ? tx.receiverBioIBAN : (tx.senderBioIBAN || '—')}</td>
+        <td>${tx.bioCatch || '—'}</td>
+        <td>${formatWithCommas(tx.amount)}</td>
+        <td>${formatDisplayDate(tx.timestamp)}</td>
+        <td>${tx.type}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+}
+
+function populateBalances() {
+  const received = vaultData.transactions
+    .filter(t => t.type === 'received')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const sent = vaultData.transactions
+    .filter(t => t.type === 'sent')
+    .reduce((sum, t) => sum + t.amount, 0);
+  vaultData.balanceTVM = vaultData.initialBalanceTVM + received - sent;
+  vaultData.balanceUSD = +(vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2);
+
+  document.getElementById('tvmBalance').textContent =
+    `Balance: ${formatWithCommas(vaultData.balanceTVM)} TVM`;
+  document.getElementById('usdBalance').textContent =
+    `Equivalent to ${formatWithCommas(vaultData.balanceUSD)} USD`;
+}
+
+function showVaultUI() {
+  document.getElementById('lockedScreen').classList.add('hidden');
+  document.getElementById('vaultUI').classList.remove('hidden');
+  renderTransactionTable();
+  populateBalances();
+}
+
+function initializeBioLine() {
+  if (bioLineIntervalTimer) clearInterval(bioLineIntervalTimer);
+  bioLineIntervalTimer = setInterval(() => {
+    vaultData.lastUTCTimestamp = Math.floor(Date.now() / 1000);
+    document.getElementById('bioLineText').textContent =
+      `🔄 BonusConstant: ${vaultData.bonusConstant}`;
+    document.getElementById('utcTime').textContent =
+      formatDisplayDate(vaultData.lastUTCTimestamp);
+  }, 1000);
+}
+
+/******************************
+ * Initialization & Event Binding
+ ******************************/
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('enterVaultBtn')
+    .addEventListener('click', checkAndUnlockVault);
+  document.getElementById('lockVaultBtn')
+    .addEventListener('click', () => { vaultUnlocked = false; location.reload(); });
+  document.getElementById('exportBackupBtn')
+    .addEventListener('click', exportVaultBackup);
+  document.getElementById('importVaultFileInput')
+    .addEventListener('change', e => importVaultBackupFromFile(e.target.files[0]));
+  document.getElementById('catchOutBtn')
+    .addEventListener('click', handleSendTransaction);
+  document.getElementById('catchInBtn')
+    .addEventListener('click', handleReceiveTransaction);
+  vaultSyncChannel.onmessage = async e => {
+    if (e.data?.type === 'vaultUpdate') {
+      const p = e.data.payload;
+      if (!derivedKey) return;
+      const dec = await decryptData(derivedKey, base64ToBuffer(p.iv), base64ToBuffer(p.data));
+      Object.assign(vaultData, dec);
+      if (vaultUnlocked) showVaultUI();
+    }
+  };
+});
+
 
 /******************************
  * Advanced BalanceChain Segment Logic
@@ -1049,3 +1659,5 @@ async function validateSenderVaultSnapshot(senderVaultSnapshot, claimedSenderIBA
 }
 
 console.log("🎯 BioVault loaded. All features initialized.");
+
+
