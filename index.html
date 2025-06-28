@@ -32,7 +32,7 @@
     h1, h2, h3 {
       margin: 10px 0;
     }
-    .hidden { display: none; }
+    .hidden { display: none !important; }
     button {
       background: #2258c4;
       color: #fff;
@@ -76,40 +76,70 @@
     #catchOutBtn { background: #f97316; }
     #catchOutBtn:hover { background: #ea580c; }
     .popup, .modal {
-      background-color: rgba(0,0,0,0.8); position: fixed; top: 0; left: 0;
-      width: 100%; height: 100%; display: none; justify-content: center;
-      align-items: center; z-index: 9999;
+      background-color: rgba(0,0,0,0.82);
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh; z-index: 10010;
+      display: none; justify-content: center; align-items: center;
+      flex-direction: column;
     }
-    .popup-content, .modal-content {
-      background: #fff; color: #000; padding: 24px 24px 10px 24px;
-      border-radius: 10px; text-align: left; max-width: 470px; width: 93%;
+    .modal-content, .popup-content {
+      background: #fff; color: #0e2242;
+      padding: 32px 22px;
+      border-radius: 10px;
+      max-width: 440px;
+      min-width: 270px;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.25);
+      text-align: left;
       position: relative;
-      box-shadow: 0 8px 32px 0 rgba(25,25,40,0.18);
+      font-size: 17px;
+      line-height: 1.6;
+      font-family: inherit;
     }
-    .modal-content h2, .modal-content h3 { color: #2258c4; }
-    .modal-content ul, .modal-content li { color: #222; }
+    .modal-content h2, .modal-content h3, .popup-content h3 {
+      margin-top: 0;
+      color: #174ca7;
+    }
     .modal-close {
-      position: absolute; top: 12px; right: 18px;
-      font-size: 22px; background: none; border: none; color: #333;
-      cursor: pointer; font-weight: bold;
+      position: absolute;
+      top: 9px; right: 16px;
+      background: none;
+      border: none;
+      color: #144180;
+      font-size: 25px;
+      cursor: pointer;
     }
-    #passModal {
-      display: none; position: fixed; z-index: 99999;
-      top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6);
-      justify-content: center; align-items: center;
+    .modal-links a {
+      color: #2258c4;
+      text-decoration: underline;
+      font-weight: bold;
+      display: inline-block;
+      margin: 6px 0;
     }
-    #passModal .popup-content {
-      background: #fff; color: #000; padding: 20px; border-radius: 8px;
-      text-align: center; max-width: 400px; width: 80%; margin:80px auto; position:relative;
+    .modal-features {
+      display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
     }
-    #lockVaultBtn {
-      position: absolute; top: 20px; right: 20px;
+    .modal-feature {
+      background: #1a2d50;
+      border-radius: 7px;
+      padding: 7px 14px;
+      font-size: 1rem;
+      min-width: 110px;
+      color: #ffe164;
+      text-align: center;
     }
-    #terminateBtn {
-      background: #ef4444; font-size: 14px; border-radius: 5px; display: none;
+    .modal-list {
+      padding-left: 18px;
+      margin: 9px 0;
     }
-    #terminateBtn:hover { background: #dc2626; }
-    #footer { margin-top: 20px; }
+    .modal-tip {
+      color: #08b0a4;
+      background: #f3f4f6;
+      padding: 7px 12px;
+      border-radius: 5px;
+      display: inline-block;
+      margin: 9px 0 0 0;
+      font-size: 0.96rem;
+    }
     .explainer-section {
       background: rgba(255,255,255,0.12);
       border-radius: 10px;
@@ -142,12 +172,16 @@
     .explainer-links {
       margin: 18px 0 0 0;
     }
-    .explainer-links a {
+    .explainer-links button {
+      background: none;
       color: #fff;
-      text-decoration: underline;
-      margin: 0 18px;
+      border: none;
       font-weight: bold;
+      text-decoration: underline;
       cursor: pointer;
+      margin: 0 10px;
+      padding: 0;
+      font-size: 1.08em;
     }
     .onboarding-tip {
       color: #7fffd4;
@@ -158,30 +192,17 @@
       margin: 12px 0;
       font-size: 1rem;
     }
-    .modal-content .subtitle {
-      font-size: 1.1rem; color: #3c4266; margin-bottom: 9px;
-    }
-    .modal-content .modal-link {
-      color: #1a2d50;
-      text-decoration: underline;
-      margin-left: 8px;
-      font-size: 1.01em;
-      cursor: pointer;
-    }
     @media (max-width: 768px) {
-      #transactionTable th:nth-child(2),
-      #transactionTable td:nth-child(2) {
-        max-width: 60px; word-wrap: break-word;
-      }
+      .explainer-section, .modal-content, .popup-content { padding: 12px 2vw; font-size: 15px; }
+      #transactionTable th:nth-child(2), #transactionTable td:nth-child(2) { max-width: 60px; word-wrap: break-word; }
       .input-field { width: 70%; }
       #bioLineUTCContainer { width: 80%; flex-direction: column; }
-      .explainer-section { padding: 15px 5vw; font-size: 15px; }
     }
     @media (max-width: 480px) {
       #transactionTable { font-size: 12px; }
       button { padding: 8px 16px; font-size: 14px; }
-      .explainer-features { flex-direction: column; }
-      .explainer-feature { font-size: 0.98rem; }
+      .explainer-features, .modal-features { flex-direction: column; }
+      .explainer-feature, .modal-feature { font-size: 0.98rem; }
     }
   </style>
 </head>
@@ -190,7 +211,8 @@
   <div class="explainer-section" id="explainer">
     <h2>BalanceChain: Digital Money. Redefined.</h2>
     <div>
-      <b>1 TVM = 1 USD. Always. Powered by human effort. Proven by code. <br>Welcome to the only digital value system that can never devalue or inflate your money.</b>
+      <b>1 TVM = 1 USD. Always. Powered by human effort. Proven by code.<br>
+      Welcome to the only digital value system that can never devalue or inflate your money.</b>
     </div>
     <div class="explainer-features">
       <div class="explainer-feature">Pegged & Stable</div>
@@ -201,25 +223,96 @@
       <div class="explainer-feature">No Middlemen, No Mining, No Speculation</div>
     </div>
     <div class="explainer-links">
-      <a id="whitePaperLink">Read White Paper</a>
-      <a id="tvmContractLink">TVM Contract</a>
-      <a id="faqLink">FAQ</a>
-      <a id="supportLink">Support</a>
-      <a id="communityLink">Community</a>
-      <a id="termsLink" style="float:right;">Terms</a>
+      <button onclick="openModal('whitepaperModal')">Read White Paper</button>
+      <button onclick="openModal('contractModal')">TVM Contract</button>
+      <button onclick="openModal('faqModal')">FAQ</button>
+      <button onclick="openModal('supportModal')">Support</button>
+      <button onclick="openModal('communityModal')">Community</button>
+      <button onclick="openModal('legalModal')">Legal</button>
     </div>
     <div class="onboarding-tip">
       <b>Tip:</b> Back up your vault regularly. If you lose your backup or passphrase, your funds are gone forever.
     </div>
   </div>
 
-  <!-- Modals (FAQ, White Paper, Support, Terms, Community, Contract) -->
-  <div id="modal" class="modal">
-    <div class="modal-content" id="modalContent">
-      <button class="modal-close" id="closeModalBtn" title="Close">&times;</button>
-      <!-- Modal content will be injected here -->
+  <!-- Modals Start -->
+  <!-- White Paper Modal -->
+  <div id="whitepaperModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('whitepaperModal')">&times;</button>
+    <h2>BalanceChain White Paper (Summary)</h2>
+    <div class="modal-features">
+      <div class="modal-feature">Pegged 1 TVM = 1 USD</div>
+      <div class="modal-feature">Audit-Proof & Human-Effort</div>
+      <div class="modal-feature">Protocol-Enforced Stability</div>
     </div>
-  </div>
+    <ul class="modal-list">
+      <li><b>TVM</b> is pegged, not speculative, and always redeemable 1:1 for USD value.</li>
+      <li><b>Every unit</b> of TVM is backed by cryptographic proof of human effort (SHE).</li>
+      <li>No mining, no printing, no hidden inflation—just real value from real work.</li>
+      <li>Works offline, is self-custodial, and instantly auditable by anyone.</li>
+      <li>The TVM smart contract bridges BalanceChain and blockchain. All on-chain TVM is always 100% backed by protocol rules.</li>
+    </ul>
+    <div class="modal-tip">
+      For the full technical white paper, <b>contact support</b> or join the community.
+    </div>
+  </div></div>
+  <!-- Contract Modal -->
+  <div id="contractModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('contractModal')">&times;</button>
+    <h2>TVM Smart Contract</h2>
+    <div style="word-break:break-all;">
+      Contract Address:<br>
+      <b>0xYourTVMContractHere</b>
+    </div>
+    <div class="modal-tip">
+      All on-chain TVM is pegged, stable, and publicly auditable.<br>
+      <a style="color:#2258c4;" href="https://etherscan.io/address/0xYourTVMContractHere" target="_blank">View on Etherscan</a>
+    </div>
+  </div></div>
+  <!-- FAQ Modal -->
+  <div id="faqModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('faqModal')">&times;</button>
+    <h2>FAQ</h2>
+    <ul class="modal-list">
+      <li><b>How is TVM always $1?</b> Peg is enforced by protocol & smart contract. No floating. No speculation.</li>
+      <li><b>What is Bio-IBAN?</b> It's your unique, private, cryptographically secure account number.</li>
+      <li><b>What is a Bio-Catch?</b> A cryptographic proof of a value transfer or bonus claim.</li>
+      <li><b>What if I lose my vault?</b> Your funds are gone forever. Always back up your vault and passphrase.</li>
+      <li><b>Can I use TVM on blockchain?</b> Yes—just connect your on-chain wallet and use the TVM contract gateway.</li>
+      <li><b>How is this private?</b> Only you hold your keys and proof. Nothing is public unless you post it on-chain.</li>
+      <li><b>What is audit-proof?</b> Every coin's entire history is provable, auditable, and can be exported for review.</li>
+    </ul>
+  </div></div>
+  <!-- Support Modal -->
+  <div id="supportModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('supportModal')">&times;</button>
+    <h2>Support</h2>
+    <div style="margin:12px 0;">
+      For help, questions, or reporting bugs:<br>
+      <b>Email:</b> <a href="mailto:support@shemoney.app" style="color:#2258c4;">support@shemoney.app</a><br>
+      <b>Telegram:</b> <a href="https://t.me/yourcommunity" target="_blank" style="color:#2258c4;">@yourcommunity</a>
+    </div>
+  </div></div>
+  <!-- Community Modal -->
+  <div id="communityModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('communityModal')">&times;</button>
+    <h2>Community</h2>
+    <div>
+      Join us for the latest updates and to meet other users:<br>
+      <b>Telegram:</b> <a href="https://t.me/yourcommunity" target="_blank" style="color:#2258c4;">@yourcommunity</a><br>
+      <b>Discord:</b> <a href="https://discord.gg/yourserver" target="_blank" style="color:#2258c4;">discord.gg/yourserver</a>
+    </div>
+  </div></div>
+  <!-- Legal Modal -->
+  <div id="legalModal" class="modal"><div class="modal-content">
+    <button class="modal-close" onclick="closeModal('legalModal')">&times;</button>
+    <h2>Legal & Privacy</h2>
+    <div>
+      <b>Terms:</b> This vault app is experimental and open-source. Users are fully responsible for their funds and backups. By using this app you agree to hold the creators harmless.<br>
+      <b>Privacy:</b> No personal data is collected or transmitted. All value, keys, and backups stay local in your browser unless you export them.
+    </div>
+  </div></div>
+  <!-- Modals End -->
 
   <!-- Locked Screen -->
   <div id="lockedScreen">
@@ -252,30 +345,42 @@
       <input type="text" id="bioibanInput" class="input-field" placeholder="BIO..." readonly>
       <button id="copyBioIBANBtn">Copy</button>
     </div>
+
+    <!-- Balances -->
     <div class="section" id="balanceContainer">
       <span id="tvmBalance">Balance: 0 TVM</span><br>
       <span id="usdBalance">Equivalent to 0 USD</span>
     </div>
+
+    <!-- Bio-Line + UTC  -->
     <div class="section" id="bioLineUTCContainer">
       <div id="bioLineText">🔄 BonusConstant: 0</div>
       <div id="utcTime">UTC Time: ...</div>
     </div>
+
+    <!-- On-Chain Wallet Field -->
     <div class="section">
       <label>On‑Chain Wallet Address:</label><br>
       <input type="text" id="userWalletAddress" class="input-field" placeholder="0xYourWallet...">
       <button id="saveWalletBtn">Save Wallet</button>
       <button id="autoConnectWalletBtn">Auto‑Connect MetaMask</button>
     </div>
+
+    <!-- Catch In -->
     <div class="section" id="catchInSection">
       <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio‑Catch #">
       <input type="number" id="catchInAmount" class="input-field" placeholder="Amount (TVM)">
       <button id="catchInBtn">Catch In</button>
     </div>
+
+    <!-- Catch Out -->
     <div class="section" id="catchOutSection">
       <input type="text" id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio‑IBAN">
       <input type="number" id="catchOutAmount" class="input-field" placeholder="Amount (TVM)">
       <button id="catchOutBtn">Catch Out</button>
     </div>
+
+    <!-- Transactions -->
     <h3>Transaction History</h3>
     <div class="section">
       <button id="exportBtn">Export Transactions</button>
@@ -297,10 +402,13 @@
       </thead>
       <tbody id="transactionBody"></tbody>
     </table>
+
     <div class="section" id="p2pInfo">
-      <span>(Exchange Rate: 1 USD = 12 TVM — Protocol Pegged. See <a id="whitePaperLink2" style="color:#ffe164; cursor:pointer;">White Paper</a>)</span>
+      <span>(Exchange Rate: 1 USD = 12 TVM — Protocol Pegged. <button style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;" onclick="openModal('whitepaperModal')">White Paper</button>)</span>
     </div>
   </div>
+
+  <!-- Popup for newly generated Bio‑Catch -->
   <div id="bioCatchPopup" class="popup" aria-modal="true" role="dialog">
     <div class="popup-content">
       <h3>Your Bio‑Catch Number</h3>
@@ -309,123 +417,31 @@
       <button id="closeBioCatchPopup">Close</button>
     </div>
   </div>
+
+  <!-- Footer -->
   <div class="section" id="footer">
     <p style="color:#fff;">By RR.R — for Humanity. &copy; <span id="currentYear"></span></p>
     <script>document.getElementById('currentYear').textContent = new Date().getFullYear();</script>
   </div>
 
+  <!-- Modal script -->
   <script>
-    // Modal logic
-    const modal = document.getElementById('modal');
-    const modalContent = document.getElementById('modalContent');
-    const closeModalBtn = document.getElementById('closeModalBtn');
-    function openModal(html) {
-      modalContent.querySelectorAll('.modal-body').forEach(e=>e.remove());
-      const div = document.createElement('div');
-      div.className = 'modal-body';
-      div.innerHTML = html;
-      modalContent.appendChild(div);
-      modal.style.display = 'flex';
+    function openModal(id) {
+      document.getElementById(id).style.display = 'flex';
     }
-    closeModalBtn.onclick = () => { modal.style.display = 'none'; };
-    window.onclick = function(e) { if(e.target===modal)modal.style.display='none'; };
-
-    // Modal content
-    const FAQ_HTML = `
-      <h2>FAQ: BalanceChain & TVM</h2>
-      <ul>
-        <li><b>How does the peg work?</b><br>All TVM is protocol pegged: 1 TVM = 1 USD. The supply and exchange are enforced on-chain and in-app, never floating or speculative.</li>
-        <li><b>What is a Bio-IBAN?</b><br>Your unique, privacy-safe account address for peer-to-peer transfers. Share it to receive TVM.</li>
-        <li><b>What is a Bio-Catch?</b><br>A cryptographic proof generated when you earn a bonus (Standard Human Effort). Use it to claim bonus TVM or share with others for validation.</li>
-        <li><b>How do I backup or restore?</b><br>Always export your vault backup (encrypted file) and store it safely. Without your backup and passphrase, your funds cannot be recovered.</li>
-        <li><b>How do I move funds to blockchain/crypto?</b><br>Connect your on-chain wallet, then use the TVM smart contract gateway to mint or redeem TVM with validated bonus proof.</li>
-        <li><b>Is this anonymous?</b><br>Yes—no personal data is stored or needed. All actions are cryptographically signed. You control your data and funds.</li>
-        <li><b>What is "audit-proof"?</b><br>Every TVM and bonus can be publicly and cryptographically proven—by you, by others, or by regulators—without revealing private info.</li>
-        <li><b>How do I get support?</b><br>Click "Support" in the top bar to reach the team via email or community chat.</li>
-      </ul>
-    `;
-    const WHITEPAPER_HTML = `
-      <h2>White Paper (Summary)</h2>
-      <p class="subtitle">For the full PDF, contact <b>support@shemoney.app</b> or join the community.</p>
-      <ul>
-        <li><b>Vision:</b> Universal, audit-proof, fair digital money for all humanity—1 TVM = 1 USD by design, forever.</li>
-        <li><b>Protocol:</b> All value is tracked by cryptographic segments, not accounts or blocks. Each transfer = Standard Human Effort (SHE).</li>
-        <li><b>Gateway:</b> The TVM contract bridges real-world work and crypto, always pegged.</li>
-        <li><b>Security:</b> No central custody, user-controlled backups, private keys local to device, instant validation.</li>
-        <li><b>Compliance:</b> Regulator-grade auditability, open source, and open audit at all times.</li>
-      </ul>
-      <div style="margin:8px 0;">
-        <a href="whitepaper.pdf" target="_blank" style="color:#2258c4;font-weight:bold;">Download full white paper (PDF)</a>
-      </div>
-    `;
-    const TVMCONTRACT_HTML = `
-      <h2>TVM Contract</h2>
-      <div>
-        <b>Mainnet Address:</b> <span style="font-family:monospace">0xYourTVMContract</span><br>
-        <a href="https://etherscan.io/address/0xYourTVMContract" target="_blank" style="color:#2258c4;">View on Etherscan</a>
-      </div>
-      <p style="margin-top:8px;">
-        The TVM contract enforces the peg (1 TVM = 1 USD), allows secure mint/burn, and serves as the public on-chain gateway for BalanceChain.<br>
-        <i>Tip: Always verify contract addresses from this website.</i>
-      </p>
-    `;
-    const SUPPORT_HTML = `
-      <h2>Support</h2>
-      <div>
-        <b>Email:</b> <a href="mailto:support@shemoney.app" style="color:#2258c4;">support@shemoney.app</a><br>
-        <b>Telegram:</b> <a href="https://t.me/yourcommunity" target="_blank" style="color:#2258c4;">@yourcommunity</a>
-      </div>
-      <p style="margin-top:10px;">
-        For urgent issues (like vault loss, bug reports, or feedback), email us or join our Telegram.<br>
-        <b>Warning:</b> Never share your passphrase or vault file with anyone, including support.
-      </p>
-    `;
-    const COMMUNITY_HTML = `
-      <h2>Join the Community</h2>
-      <ul>
-        <li><a href="https://t.me/yourcommunity" target="_blank" style="color:#2258c4;">Telegram Group</a> (chat, help, news)</li>
-        <li><a href="https://twitter.com/yourhandle" target="_blank" style="color:#2258c4;">Twitter/X</a></li>
-        <li><a href="https://github.com/yourgithub" target="_blank" style="color:#2258c4;">GitHub (protocol, audit, devs)</a></li>
-      </ul>
-    `;
-    const TERMS_HTML = `
-      <h2>Terms & Privacy</h2>
-      <ul>
-        <li><b>Non-custodial:</b> You are solely responsible for your funds and backups.</li>
-        <li><b>No data collection:</b> This site never collects or shares your personal data.</li>
-        <li><b>Risks:</b> Digital value may be lost if backups are lost, device is destroyed, or if you forget your passphrase. No recovery is possible.</li>
-        <li><b>No guarantees:</b> Project is provided "as is". All features and values are subject to protocol rules and cryptography, not legal warranty.</li>
-      </ul>
-      <p style="font-size:12px;">© <span id="modalYear"></span> RR.R — for Humanity.</p>
-      <script>document.getElementById('modalYear') && (document.getElementById('modalYear').textContent = new Date().getFullYear());</script>
-    `;
-
-    // Link listeners for modals
-    document.getElementById('faqLink').onclick = ()=>openModal(FAQ_HTML);
-    document.getElementById('whitePaperLink').onclick = ()=>openModal(WHITEPAPER_HTML);
-    document.getElementById('whitePaperLink2').onclick = ()=>openModal(WHITEPAPER_HTML);
-    document.getElementById('tvmContractLink').onclick = ()=>openModal(TVMCONTRACT_HTML);
-    document.getElementById('supportLink').onclick = ()=>openModal(SUPPORT_HTML);
-    document.getElementById('communityLink').onclick = ()=>openModal(COMMUNITY_HTML);
-    document.getElementById('termsLink').onclick = ()=>openModal(TERMS_HTML);
-
-    // Optional: Show onboarding modal on first visit
-    window.addEventListener('DOMContentLoaded', () => {
-      if(!localStorage.getItem('vaultOnboarded')){
-        setTimeout(()=>{
-          openModal(`
-            <h2>Welcome to Your Bio-Vault</h2>
-            <div class="subtitle">3 Steps to Stay Safe:</div>
-            <ol>
-              <li><b>Set a strong passphrase</b> and don't lose it.</li>
-              <li><b>Backup your vault file</b> and store it securely (offline/cloud/USB).</li>
-              <li><b>Never share your passphrase or file</b> with anyone.</li>
-            </ol>
-            <p>BalanceChain puts you in full control—no one, not even us, can recover lost vaults.</p>
-            <button onclick="document.getElementById('modal').style.display='none';localStorage.setItem('vaultOnboarded','1')">Got It</button>
-          `);
-        }, 700);
+    function closeModal(id) {
+      document.getElementById(id).style.display = 'none';
+    }
+    // Close modal on outside click or ESC
+    document.addEventListener('keydown', e => {
+      if (e.key === "Escape") {
+        document.querySelectorAll('.modal').forEach(m => m.style.display='none');
       }
+    });
+    document.querySelectorAll('.modal').forEach(modal => {
+      modal.addEventListener('click', function(e){
+        if(e.target === modal) modal.style.display='none';
+      });
     });
   </script>
   <script type="module" src="main.js"></script>
