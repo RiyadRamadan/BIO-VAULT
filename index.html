@@ -30,9 +30,7 @@
       text-align: center;
       scroll-behavior: smooth;
     }
-    h1, h2, h3 {
-      margin: 10px 0;
-    }
+    h1, h2, h3 { margin: 10px 0; }
     .hidden { display: none !important; }
     button {
       background: #2258c4;
@@ -43,12 +41,10 @@
       font-size: 16px;
       margin: 5px;
       cursor: pointer;
-      transition: background 0.3s ease, box-shadow .18s;
+      transition: background 0.3s, box-shadow .18s;
       outline: none;
     }
-    button:focus {
-      box-shadow: 0 0 0 3px #ffe164cc;
-    }
+    button:focus { box-shadow: 0 0 0 3px #ffe164cc; }
     button:hover { background: #144180; }
     #lockedScreen { margin-top: 50px; }
     #lockedScreen #enterVaultBtn { margin-top: 20px; }
@@ -66,8 +62,40 @@
       padding: 10px; border-bottom: 1px solid #ccc; word-wrap: break-word;
     }
     #transactionTable th { background: #f3f4f6; }
-    #capsStatus { color: #ffe164; margin-top: 9px; font-size: 1.09em; font-weight: bold;}
-    /* (rest of your existing styles remain) */
+    #bioLineUTCContainer {
+      display: flex; justify-content: space-around; align-items: center;
+      background-color: rgba(255, 255, 255, 0.1); padding: 15px 30px;
+      border-radius: 10px; font-size: 18px; margin-bottom: 20px; flex-wrap: wrap;
+    }
+    #catchInSection, #catchOutSection {
+      background-color: rgba(255,255,255,0.1);
+      padding: 20px; border-radius: 10px; margin: 20px auto;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 600px;
+    }
+    #catchInBtn { background: #10b981; }
+    #catchInBtn:hover { background: #059669; }
+    #catchOutBtn { background: #f97316; }
+    #catchOutBtn:hover { background: #ea580c; }
+    #capsStatus {
+      color: #ffe164;
+      margin-top: 9px;
+      font-size: 1.09em;
+      font-weight: bold;
+    }
+    /* (rest of your style remains unchanged) */
+    .toast {
+      position: fixed;
+      bottom: 38px; left: 50%; transform: translateX(-50%);
+      background: #10b981;
+      color: #fff; font-weight: bold;
+      border-radius: 7px; padding: 15px 30px;
+      z-index: 10070; font-size: 17px;
+      min-width: 170px; text-align: center;
+      box-shadow: 0 4px 24px 0 #14418045;
+      animation: fadeIn .27s;
+      display: none;
+    }
+    .toast.toast-error { background: #ef4444; }
   </style>
 </head>
 <body>
@@ -98,10 +126,8 @@
       <b>Tip:</b> Back up your vault now. If you lose your backup or passphrase, your funds are gone forever.
     </div>
   </div>
-
   <!-- Floating Help Button -->
   <button class="help-fab" title="Get Help" aria-label="Help" onclick="openModal('faqModal')">?</button>
-
   <!-- (all your existing modals remain unchanged) -->
 
   <!-- Locked Screen -->
@@ -183,7 +209,6 @@
       <span>(Exchange Rate: 1 USD = 12 TVM — Protocol Pegged. <button style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;" onclick="openModal('whitepaperModal')">White Paper</button>)</span>
     </div>
   </div>
-  <!-- (rest of page unchanged, modals, popups, etc.) -->
   <div class="toast" id="toast"></div>
   <div class="section" id="footer">
     <p style="color:#fff;">By RR.R — for Humanity. &copy; <span id="currentYear"></span></p>
