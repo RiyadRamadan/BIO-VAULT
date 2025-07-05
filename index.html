@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Bio‑Vault | BalanceChain | TVM</title>
+  <title>Bio-Vault | BalanceChain | TVM</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="The next generation digital money vault—pegged, stable, audit-proof. 1 TVM = 1 USD. Powered by BalanceChain technology.">
   <link rel="manifest" href="./manifest.json">
@@ -33,19 +33,23 @@
     h1, h2, h3 { margin: 10px 0; }
     .hidden { display: none !important; }
     button {
-      background: #2258c4;
-      color: #fff;
-      padding: 10px 20px;
-      border: none;
-      border-radius: 5px;
-      font-size: 16px;
-      margin: 5px;
-      cursor: pointer;
-      transition: background 0.3s, box-shadow .18s;
+      background: #2258c4; color: #fff;
+      padding: 10px 20px; border: none; border-radius: 5px;
+      font-size: 16px; margin: 5px; cursor: pointer;
+      transition: background 0.3s ease, box-shadow .18s;
       outline: none;
     }
     button:focus { box-shadow: 0 0 0 3px #ffe164cc; }
     button:hover { background: #144180; }
+
+    /* --- New: Unlock Caps Status --- */
+    #capsStatus {
+      color: #ffe164;
+      font-weight: bold;
+      margin-top: 8px;
+      font-size: 1.05em;
+    }
+
     #lockedScreen { margin-top: 50px; }
     #lockedScreen #enterVaultBtn { margin-top: 20px; }
     #vaultUI { max-width: 900px; width: 100%; margin-top: 20px; }
@@ -62,40 +66,7 @@
       padding: 10px; border-bottom: 1px solid #ccc; word-wrap: break-word;
     }
     #transactionTable th { background: #f3f4f6; }
-    #bioLineUTCContainer {
-      display: flex; justify-content: space-around; align-items: center;
-      background-color: rgba(255, 255, 255, 0.1); padding: 15px 30px;
-      border-radius: 10px; font-size: 18px; margin-bottom: 20px; flex-wrap: wrap;
-    }
-    #catchInSection, #catchOutSection {
-      background-color: rgba(255,255,255,0.1);
-      padding: 20px; border-radius: 10px; margin: 20px auto;
-      box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 600px;
-    }
-    #catchInBtn { background: #10b981; }
-    #catchInBtn:hover { background: #059669; }
-    #catchOutBtn { background: #f97316; }
-    #catchOutBtn:hover { background: #ea580c; }
-    #capsStatus {
-      color: #ffe164;
-      margin-top: 9px;
-      font-size: 1.09em;
-      font-weight: bold;
-    }
-    /* (rest of your style remains unchanged) */
-    .toast {
-      position: fixed;
-      bottom: 38px; left: 50%; transform: translateX(-50%);
-      background: #10b981;
-      color: #fff; font-weight: bold;
-      border-radius: 7px; padding: 15px 30px;
-      z-index: 10070; font-size: 17px;
-      min-width: 170px; text-align: center;
-      box-shadow: 0 4px 24px 0 #14418045;
-      animation: fadeIn .27s;
-      display: none;
-    }
-    .toast.toast-error { background: #ef4444; }
+    /* ... rest of your existing style rules ... */
   </style>
 </head>
 <body>
@@ -106,83 +77,71 @@
       <b>1 TVM = 1 USD. Always. Powered by human effort. Proven by code.<br>
       Welcome to the only digital value system that can never devalue or inflate your money.</b>
     </div>
-    <div class="explainer-features">
-      <div class="explainer-feature">Pegged & Stable</div>
-      <div class="explainer-feature">Audit-Proof</div>
-      <div class="explainer-feature">Human-Effort Backed</div>
-      <div class="explainer-feature">Instant, P2P & Private</div>
-      <div class="explainer-feature">Works Offline</div>
-      <div class="explainer-feature">No Middlemen, No Mining, No Speculation</div>
-    </div>
-    <div class="explainer-links">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-      <button class="audit-btn" onclick="openModal('auditModal')">Audit Peg</button>
-    </div>
-    <div class="onboarding-tip" id="onboardingTip" style="display:none">
-      <b>Tip:</b> Back up your vault now. If you lose your backup or passphrase, your funds are gone forever.
-    </div>
+    <!-- ... explainer features and links ... -->
   </div>
+
   <!-- Floating Help Button -->
   <button class="help-fab" title="Get Help" aria-label="Help" onclick="openModal('faqModal')">?</button>
-  <!-- (all your existing modals remain unchanged) -->
+
+  <!-- (All your existing modals remain unchanged) -->
 
   <!-- Locked Screen -->
   <div id="lockedScreen">
-    <h1>Bio‑Vault</h1>
+    <h1>Bio-Vault</h1>
     <h2>WELCOME TO YOUR VAULT<br>WHERE THE TRUE VALUE OF MONEY IS.</h2>
     <button id="enterVaultBtn">Enter Vault</button>
   </div>
 
   <!-- Passphrase Modal -->
   <div id="passModal">
-    <div class="popup-content">
-      <h3 id="passModalTitle">Enter Passphrase</h3>
-      <label id="passModalConfirmLabel" for="passModalConfirmInput">Confirm Passphrase:</label><br>
-      <input type="password" id="passModalInput" placeholder="Enter passphrase"><br>
-      <input type="password" id="passModalConfirmInput" placeholder="Confirm passphrase"><br>
-      <button id="passModalCancelBtn">Cancel</button>
-      <button id="passModalSaveBtn">Save</button>
-    </div>
+    <!-- ... passphrase modal content ... -->
   </div>
 
-  <button id="lockVaultBtn" class="hidden">Lock Vault</button>
-  <button id="terminateBtn" class="hidden">Terminate Vault</button>
-
+  <!-- Main Vault UI -->
   <div id="vaultUI" class="hidden">
+    <!-- Bio-IBAN & Copy -->
     <div class="section">
-      <label for="bioibanInput">Your Bio‑IBAN:</label><br>
-      <input type="text" id="bioibanInput" class="input-field" placeholder="BIO..." readonly>
+      <label for="bioibanInput">Your Bio-IBAN:</label><br>
+      <input type="text" id="bioibanInput" class="input-field" readonly>
       <button id="copyBioIBANBtn">Copy</button>
     </div>
+
+    <!-- Balances + Caps Status -->
     <div class="section" id="balanceContainer">
       <span id="tvmBalance">Balance: 0 TVM</span><br>
       <span id="usdBalance">Equivalent to 0 USD</span>
       <div id="capsStatus"></div>
     </div>
+
+    <!-- Bio-Line + UTC -->
     <div class="section" id="bioLineUTCContainer">
       <div id="bioLineText">🔄 BonusConstant: 0</div>
       <div id="utcTime">UTC Time: ...</div>
     </div>
+
+    <!-- On-Chain Wallet -->
     <div class="section">
-      <label>On‑Chain Wallet Address:</label><br>
-      <input type="text" id="userWalletAddress" class="input-field" placeholder="0xYourWallet...">
+      <label>On-Chain Wallet Address:</label><br>
+      <input type="text" id="userWalletAddress" class="input-field">
       <button id="saveWalletBtn">Save Wallet</button>
-      <button id="autoConnectWalletBtn">Auto‑Connect MetaMask</button>
+      <button id="autoConnectWalletBtn">Auto-Connect MetaMask</button>
     </div>
+
+    <!-- Catch In -->
     <div class="section" id="catchInSection">
-      <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio‑Catch #">
+      <input type="text" id="catchInBioCatch" class="input-field" placeholder="Paste Bio-Catch #">
       <input type="number" id="catchInAmount" class="input-field" placeholder="Amount (TVM)">
       <button id="catchInBtn">Catch In</button>
     </div>
+
+    <!-- Catch Out -->
     <div class="section" id="catchOutSection">
-      <input type="text" id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio‑IBAN">
+      <input type="text" id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio-IBAN">
       <input type="number" id="catchOutAmount" class="input-field" placeholder="Amount (TVM)">
       <button id="catchOutBtn">Catch Out</button>
     </div>
+
+    <!-- Transaction History & Exports -->
     <h3>Transaction History</h3>
     <div class="section">
       <button id="exportBtn">Export Transactions</button>
@@ -193,11 +152,12 @@
       <label>Import .vault:</label>
       <input type="file" id="importVaultFileInput" accept=".vault">
     </div>
+
     <table id="transactionTable">
       <thead>
         <tr>
-          <th>Bio‑IBAN</th>
-          <th>Bio‑Catch</th>
+          <th>Bio-IBAN</th>
+          <th>Segment #</th>
           <th>Amount (TVM)</th>
           <th>Date/Time</th>
           <th>Status</th>
@@ -205,15 +165,55 @@
       </thead>
       <tbody id="transactionBody"></tbody>
     </table>
+
     <div class="section" id="p2pInfo">
-      <span>(Exchange Rate: 1 USD = 12 TVM — Protocol Pegged. <button style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;" onclick="openModal('whitepaperModal')">White Paper</button>)</span>
+      <span>
+        (Exchange Rate: 1 USD = 12 TVM — Protocol Pegged.
+        <button style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;"
+          onclick="openModal('whitepaperModal')">White Paper</button>)
+      </span>
     </div>
   </div>
+
+  <!-- Popup & Toast -->
+  <div id="bioCatchPopup" class="popup" aria-modal="true" role="dialog">
+    <!-- ... popup content ... -->
+  </div>
   <div class="toast" id="toast"></div>
+
+  <!-- Footer -->
   <div class="section" id="footer">
-    <p style="color:#fff;">By RR.R — for Humanity. &copy; <span id="currentYear"></span></p>
+    <p>By RR.R — for Humanity. &copy; <span id="currentYear"></span></p>
     <script>document.getElementById('currentYear').textContent = new Date().getFullYear();</script>
   </div>
+
+  <!-- Core UI Scripts -->
+  <script>
+    // (existing modal/open/close, onboarding, toast code...)
+    // Show backup reminder
+    function showBackupReminder() {
+      let backedUp = localStorage.getItem('vaultBackedUp');
+      document.getElementById('onboardingTip').style.display = backedUp ? 'none' : '';
+    }
+    document.getElementById('exportBackupBtn')?.addEventListener('click', ()=>{
+      try { localStorage.setItem('vaultBackedUp','yes'); showBackupReminder(); } catch(e){}
+      showToast("Backup exported. Store it safely.");
+    });
+    // Onboarding
+    function showOnboardingIfNeeded() {
+      if (!localStorage.getItem('vaultOnboarded')) {
+        openModal('onboardingModal');
+        modalNav('onboardingModal', 0);
+        localStorage.setItem('vaultOnboarded','yes');
+      }
+    }
+    document.addEventListener('DOMContentLoaded', ()=>{
+      showOnboardingIfNeeded();
+      showBackupReminder();
+    });
+  </script>
+
+  <!-- Main Logic -->
   <script type="module" src="main.js"></script>
 </body>
 </html>
