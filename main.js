@@ -5,8 +5,8 @@ const SEGMENTS_PER_YEAR = 12000;
 const INITIAL_SEGMENTS_UNLOCKED = 1200;
 const EXCHANGE_RATE = 12;
 const INITIAL_BIO_CONSTANT = 1736565605;
-const MAX_UNLOCKS_DAY = 3, MAX_UNLOCKS_MONTH = 30, MAX_UNLOCKS_YEAR = 90;
-const TVM_CONTRACT_ADDRESS = "0xYourTvmContractAddress"; // <=== Set to your ERC20 contract
+const FOUNDER_KEY = "BioVault_Founder_Public_Key"; // Set at system genesis, globally known
+const TVM_CONTRACT_ADDRESS = "0xYourTvmContractAddress"; // Set to your ERC20 contract
 const TVM_CONTRACT_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function transfer(address,uint256) returns (bool)"
@@ -85,14 +85,18 @@ async function deriveKeyFromPassword(password, salt) {
 }
 
 /* ==== SEGMENT MODEL ==== */
+// The founderKey & genesisBioConst are set on every segment, so originality/provenance can be checked on-chain and off.
 function buildGenesisVault(credentialId, joinTS) {
-  const baseBio = INITIAL_BIO_CONSTANT + (joinTS - INITIAL_BIO_CONSTANT);
+  const genesisBioConst = INITIAL_BIO_CONSTANT;
+  const baseBio = genesisBioConst + (joinTS - genesisBioConst);
   let segments = [];
   for(let i=1;i<=SEGMENTS_PER_YEAR;i++) {
     const unlocked = i <= INITIAL_SEGMENTS_UNLOCKED;
     segments.push({
       segmentIndex: i,
       amount: 1,
+      founderKey: FOUNDER_KEY, // GLOBAL founder key for all original segments
+      genesisBioConst: genesisBioConst,
       originalOwnerKey: credentialId,
       originalOwnerTS: joinTS,
       originalBioConst: baseBio,
@@ -103,8 +107,9 @@ function buildGenesisVault(credentialId, joinTS) {
       ownershipChangeProof: null
     });
   }
+  // Bio-IBAN = deterministic from credentialId + genesis constant (no PII)
   return {
-    bioIBAN: `BIO${baseBio + joinTS}`,
+    bioIBAN: "BIO" + btoa(credentialId).replace(/[^a-zA-Z0-9]/g,'') + baseBio,
     initialBioConstant: baseBio,
     joinTimestamp: joinTS,
     credentialId,
@@ -137,8 +142,7 @@ function unlockNewSegments(count, nowSec) {
 /* ==== BIOMETRIC VALIDATION ON EVERY ACTION ==== */
 async function requireBiometricBeforeCriticalAction() {
   try {
-    const {cryptoKey: key, assertion} = await unlockWithWebAuthn(); // Triggers FaceID/Fingerprint prompt
-    // Use assertion.response.signature as proof for this action
+    const {cryptoKey: key, assertion} = await unlockWithWebAuthn();
     const assertionHash = await window.crypto.subtle.digest("SHA-256", assertion.response.signature);
     return {
       assertionHash: Array.from(new Uint8Array(assertionHash)).map(b => b.toString(16).padStart(2, '0')).join(''),
@@ -201,7 +205,7 @@ async function sendTVMtoOnchain(receiver, amount) {
   }
 }
 
-/* ==== VAULT BOOT/UNLOCK ==== */
+/* ==== VAULT BOOT/UNLOCK (Passwordless Onboarding) ==== */
 $('enterVaultBtn').onclick = async () => {
   if (!localStorage.getItem('bioVaultCredentialId')) {
     try { await createWebAuthnCredential(); showToast("WebAuthn registered. Now unlock."); }
@@ -252,13 +256,13 @@ function renderTransactionTable() {
   vaultData.transactions.slice().reverse().forEach(tx => {
     let badge = tx.onChain ? '<span class="badge badge-chain">On-Chain</span>' : '';
     let row = document.createElement('tr');
-    row.innerHTML = `<td>${tx.bioIBAN || ''}</td><td>${tx.bioCatch || ''}</td>
+    row.innerHTML = `<td>${tx.bioIBAN || ''}</td><td>${tx.bioCatch ? '[segment]' : ''}</td>
       <td>${tx.amount || ''}</td><td>${tx.date || ''}</td><td>${tx.status || ''} ${badge}</td>`;
     tbody.appendChild(row);
   });
 }
 
-/* ==== CATCH OUT / IN (SEND/RECEIVE TVM with Biometric Proof) ==== */
+/* ==== CATCH OUT / IN (SEND/RECEIVE TVM—Segments as Bio-Catch) ==== */
 $('catchOutBtn').onclick = async () => {
   const proof = await requireBiometricBeforeCriticalAction();
   if (!proof) return;
@@ -272,6 +276,7 @@ $('catchOutBtn').onclick = async () => {
   if (spendable.length < amt) return showToast("Insufficient unlocked TVM", true);
 
   const nowSec = proof.timestamp;
+  let bioCatchSegments = [];
   for (let i = 0; i < amt; ++i) {
     let seg = spendable[i];
     seg.previousOwnerKey   = seg.currentOwnerKey;
@@ -279,17 +284,19 @@ $('catchOutBtn').onclick = async () => {
     seg.unlocked           = false;
     seg.last_update        = nowSec;
     seg.ownershipChangeProof = proof;
+    // The segment object is the bio-catch!
+    bioCatchSegments.push({...seg}); // deep copy
   }
   vaultData.balanceTVM -= amt;
   vaultData.balanceUSD = +(vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2);
   vaultData.transactions.push({
     bioIBAN: recv,
-    bioCatch: 'TX-' + nowSec,
+    bioCatch: JSON.stringify(bioCatchSegments), // segments themselves!
     amount: amt,
     date: new Date(nowSec*1000).toISOString().replace('T',' ').slice(0,19),
     status: 'Completed'
   });
-  vaultData.auditTrail.push({ type:"out", to:recv, amount:amt, ts:nowSec, proof });
+  vaultData.auditTrail.push({ type:"out", to:recv, amount:amt, ts:nowSec, proof, bioCatchSegments });
   await saveVault();
   populateWalletUI();
   showToast(`Sent ${amt} TVM`);
@@ -300,29 +307,41 @@ $('catchInBtn').onclick = async () => {
   const proof = await requireBiometricBeforeCriticalAction();
   if (!proof) return;
   if (!isVaultUnlocked) return showToast("Unlock first!", true);
-  const bioCatch = $('catchInBioCatch').value.trim();
-  const amt = parseInt($('catchInAmount').value.trim(), 10);
-  if (!bioCatch || !amt || isNaN(amt) || amt < 1) return showToast("Enter valid Bio-Catch & amount", true);
-  const nowSec = proof.timestamp;
-  let unlockedCount = unlockNewSegments(amt, nowSec);
-  let count = 0;
-  for (let i = 0; i < vaultData.segments.length && count < amt; ++i) {
-    let seg = vaultData.segments[i];
-    if (seg.unlocked && !seg.ownershipChangeProof) {
-      seg.ownershipChangeProof = proof;
-      count++;
-    }
+  let bioCatchStr = $('catchInBioCatch').value.trim();
+  let amt = parseInt($('catchInAmount').value.trim(), 10);
+  if (!bioCatchStr || !amt || isNaN(amt) || amt < 1) return showToast("Paste Bio-Catch segments JSON and amount", true);
+  let bioCatchSegments;
+  try {
+    bioCatchSegments = JSON.parse(bioCatchStr);
+    if (!Array.isArray(bioCatchSegments) || bioCatchSegments.length !== amt)
+      throw new Error("Bio-Catch segment count mismatch");
+  } catch(e) {
+    return showToast("Invalid Bio-Catch input", true);
   }
-  vaultData.balanceTVM += unlockedCount;
+  const nowSec = proof.timestamp;
+  // For each claimed segment, assign ownership to current user and mark unlocked
+  bioCatchSegments.forEach(segment => {
+    let mySeg = vaultData.segments.find(s => !s.unlocked && !s.currentOwnerKey);
+    if (mySeg) {
+      Object.assign(mySeg, {
+        ...segment,
+        currentOwnerKey: vaultData.credentialId,
+        unlocked: true,
+        last_update: nowSec,
+        ownershipChangeProof: proof
+      });
+    }
+  });
+  vaultData.balanceTVM += amt;
   vaultData.balanceUSD = +(vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2);
   vaultData.transactions.push({
     bioIBAN: vaultData.bioIBAN,
-    bioCatch: bioCatch,
+    bioCatch: `[claimed ${amt} segments]`,
     amount: amt,
     date: new Date(nowSec*1000).toISOString().replace('T',' ').slice(0,19),
     status: 'Received'
   });
-  vaultData.auditTrail.push({ type:"in", from:bioCatch, amount:amt, ts:nowSec, proof });
+  vaultData.auditTrail.push({ type:"in", from:"segment-import", amount:amt, ts:nowSec, proof, bioCatchSegments });
   await saveVault();
   populateWalletUI();
   showToast(`Received ${amt} TVM`);
@@ -350,7 +369,7 @@ $('catchOutBtn').ondblclick = async () => {
   if (receiver && amt && amt > 0) await sendTVMtoOnchain(receiver, amt);
 };
 
-/* ==== EXPORT / IMPORT ==== */
+/* ==== EXPORT BACKUP (No Password) ==== */
 $('exportBackupBtn').onclick = () => {
   const enc = localStorage.getItem('bioVaultEncrypted');
   const blob = new Blob([enc], {type: 'application/json'});
@@ -360,36 +379,6 @@ $('exportBackupBtn').onclick = () => {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   showToast("Vault exported");
-};
-$('importVaultFileInput').onchange = function() {
-  const file = this.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      localStorage.setItem('bioVaultEncrypted', e.target.result);
-      showToast("Vault imported. Please unlock.");
-    } catch (err) {
-      showToast("Import failed", true);
-    }
-  };
-  reader.readAsText(file);
-};
-
-/* ==== EXPORT TRANSACTIONS CSV ==== */
-$('exportBtn').onclick = () => {
-  if (!vaultData) return showToast("Unlock first!", true);
-  const csv = ["BioIBAN,BioCatch,Amount,Date,Status"];
-  vaultData.transactions.forEach(tx =>
-    csv.push([tx.bioIBAN, tx.bioCatch, tx.amount, tx.date, tx.status].join(','))
-  );
-  const blob = new Blob([csv.join('\n')], {type:'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'transactions.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast("Transactions exported");
 };
 
 /* ==== EXPORT FRIENDLY BACKUP (Password protected) ==== */
@@ -410,7 +399,7 @@ $('exportFriendlyBtn').onclick = async () => {
   showToast("Password-protected backup exported");
 };
 
-/* ==== IMPORT PASSWORD-PROTECTED BACKUP ==== */
+/* ==== IMPORT BACKUP ==== */
 $('importVaultFileInput').onchange = function() {
   const file = this.files[0];
   if (!file) return;
@@ -463,16 +452,10 @@ function modalNav(modalId, idx) {
   navBtns.forEach((btn, i) => btn.classList.toggle('active', i === idx));
 }
 
-/* ==== BIO-CATCH POPUP ==== */
-$('closeBioCatchPopup').onclick = () => $('bioCatchPopup').style.display = 'none';
-$('copyBioCatchBtn').onclick = () => {
-  const txt = $('bioCatchNumberText').textContent;
-  if (txt) navigator.clipboard.writeText(txt).then(()=>showToast("Bio-Catch copied!"));
-};
-
 /* ==== LIVE AUDIT PEG VALUE ==== */
 async function updateAuditPeg() {
-  $('auditPegLive').textContent = '1 TVM = 1 USD (Protocol Peg enforced)';
+  if ($('auditPegLive'))
+    $('auditPegLive').textContent = '1 TVM = 1 USD (Protocol Peg enforced)';
 }
 if ($('auditPegLive')) updateAuditPeg();
 
@@ -482,17 +465,6 @@ function updateUTC() {
   setTimeout(updateUTC, 1000);
 }
 updateUTC();
-
-/* ==== SHOW/HIDE LOCK/TERMINATE BUTTONS BASED ON STATE ==== */
-function updateVaultButtons() {
-  if (isVaultUnlocked) {
-    $('lockVaultBtn').classList.remove('hidden');
-    $('terminateBtn').classList.remove('hidden');
-  } else {
-    $('lockVaultBtn').classList.add('hidden');
-    $('terminateBtn').classList.add('hidden');
-  }
-}
 
 /* ==== LOCK VAULT ==== */
 if ($('lockVaultBtn')) $('lockVaultBtn').onclick = () => {
@@ -512,7 +484,7 @@ window.addEventListener('load', () => {
   $('enterVaultBtn')?.focus();
 });
 
-/* ==== ACCESSIBILITY ==== */
+/* ==== ACCESSIBILITY & AUTO-LOCK ==== */
 document.querySelectorAll('.modal').forEach(modal => {
   modal.setAttribute('aria-modal', 'true');
   modal.setAttribute('role', 'dialog');
@@ -525,8 +497,6 @@ document.addEventListener('keydown', function (e) {
     });
   }
 });
-
-/* ==== AUTO-LOCK SESSION HANDLING ==== */
 function resetIdleTimer() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
@@ -559,14 +529,15 @@ $('terminateBtn').onclick = () => {
   }
 };
 
-/* ==== ENSURE BUTTONS UPDATE VISIBILITY ON UNLOCK/LOCK ==== */
-function populateWalletUI() {
-  if (!vaultData) return;
-  $('bioibanInput').value = vaultData.bioIBAN;
-  $('tvmBalance').textContent = `Balance: ${vaultData.balanceTVM} TVM`;
-  $('usdBalance').textContent = `Equivalent to ${vaultData.balanceUSD} USD`;
-  renderTransactionTable();
-  updateVaultButtons();
+/* ==== SHOW/HIDE LOCK/TERMINATE BUTTONS ==== */
+function updateVaultButtons() {
+  if (isVaultUnlocked) {
+    $('lockVaultBtn').classList.remove('hidden');
+    $('terminateBtn').classList.remove('hidden');
+  } else {
+    $('lockVaultBtn').classList.add('hidden');
+    $('terminateBtn').classList.add('hidden');
+  }
 }
 
 /* ==== FOOTER YEAR ==== */
