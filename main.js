@@ -37,7 +37,11 @@ async function createWebAuthnCredential() {
       challenge: window.crypto.getRandomValues(new Uint8Array(32)),
       rp: { name: "BioVault" },
       user: { id: Uint8Array.from(String(Date.now())), name: "user@balancechain", displayName: "BioVault User" },
-      pubKeyCredParams: [{alg: -7, type: "public-key"}],
+      pubKeyCredParams: [
+  {alg: -7, type: "public-key"},
+  {alg: -257, type: "public-key"}
+],
+
       authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
       timeout: 60000, attestation: "direct"
     }
