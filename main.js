@@ -752,3 +752,139 @@ window.deriveKeyFromPIN = deriveKeyFromPIN;
 window.encryptData = encryptData;
 window.decryptData = decryptData;
 window.rotateEncryptionKey = rotateEncryptionKey;
+
+<script type="module">
+// ======= UI State & VaultData ===========
+let vaultData = null;
+let decryptedKey = null;
+
+// ========== 1. App Entry Point ===========
+window.addEventListener('DOMContentLoaded', () => {
+  if (!localStorage.getItem('vaultOnboarded')) {
+    // First use: Start onboarding
+    showOnboardingModal();
+  } else {
+    // Returning user: Prompt unlock
+    showUnlockModal();
+  }
+});
+
+// ========== 2. Onboarding (First Time) ===========
+function showOnboardingModal() {
+  // Show a modal or popup that asks user to enter PIN/passphrase
+  const passphrase = prompt("Set a secure passphrase (min 6 chars):");
+  if (!passphrase || passphrase.length < 6) {
+    alert("Please choose a longer passphrase.");
+    return showOnboardingModal();
+  }
+  safeHandler(async () => {
+    vaultData = await window.onboardUser(passphrase);
+    decryptedKey = await window.deriveKeyFromPIN(passphrase, vaultData.salt);
+    localStorage.setItem('vaultOnboarded', 'yes');
+    renderVaultUI();
+  });
+}
+
+// ========== 3. Unlock Existing Vault ===========
+function showUnlockModal() {
+  const passphrase = prompt("Enter your vault passphrase to unlock:");
+  if (!passphrase) return;
+  safeHandler(async () => {
+    const data = await window.loadVaultDataFromDB();
+    decryptedKey = await window.deriveKeyFromPIN(passphrase, data.salt);
+    vaultData = await window.decryptData(decryptedKey, data.iv, data.ciphertext);
+    renderVaultUI();
+  });
+}
+
+// ========== 4. Render Vault UI ===========
+function renderVaultUI() {
+  document.getElementById('lockedScreen').classList.add('hidden');
+  document.getElementById('vaultUI').classList.remove('hidden');
+  // Show balances, wallet, etc
+  document.getElementById('bioibanInput').value = vaultData.deviceKeyHashes[0]?.slice(0,20) || "BIO...";
+  document.getElementById('tvmBalance').innerText = `Balance: ${getTvmBalance(vaultData)} TVM`;
+  document.getElementById('usdBalance').innerText = `Equivalent to ${(getTvmBalance(vaultData)/12).toFixed(2)} USD`;
+  document.getElementById('bioLineText').innerText = `🔄 BonusConstant: ${vaultData.userBioConst}`;
+  document.getElementById('utcTime').innerText = "UTC Time: " + new Date().toUTCString();
+  document.getElementById('userWalletAddress').value = vaultData.walletAddress || '';
+  document.getElementById('tvmClaimable').innerText = `TVM Claimable: ${getAvailableTVMClaims(vaultData)}`;
+}
+
+// ========== 5. Lock Vault ===========
+document.getElementById('lockVaultBtn').addEventListener('click', () => {
+  document.getElementById('vaultUI').classList.add('hidden');
+  document.getElementById('lockedScreen').classList.remove('hidden');
+  vaultData = null;
+  decryptedKey = null;
+});
+
+// ========== 6. Save Wallet ===========
+document.getElementById('saveWalletBtn').addEventListener('click', async () => {
+  const addr = document.getElementById('userWalletAddress').value.trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) return showToast("Invalid wallet address", true);
+  vaultData.walletAddress = addr;
+  // Save to DB
+  const { iv, ciphertext } = await window.encryptData(decryptedKey, vaultData);
+  await window.saveVaultDataToDB(iv, ciphertext, bufferToBase64(vaultData.salt), vaultData);
+  showToast("Wallet address saved.");
+});
+
+// ========== 7. MetaMask ===========
+document.getElementById('autoConnectWalletBtn').addEventListener('click', async () => {
+  if (!window.ethereum) return showToast("MetaMask not found", true);
+  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  document.getElementById('userWalletAddress').value = accounts[0];
+  vaultData.walletAddress = accounts[0];
+  // Save to DB
+  const { iv, ciphertext } = await window.encryptData(decryptedKey, vaultData);
+  await window.saveVaultDataToDB(iv, ciphertext, bufferToBase64(vaultData.salt), vaultData);
+  showToast("MetaMask connected.");
+});
+
+// ========== 8. Claim TVM ===========
+document.getElementById('claimTvmBtn').addEventListener('click', async () => {
+  try {
+    const proofBundle = await window.claimTvmTokens(vaultData);
+    // Optionally: Download proofBundle or show for submission
+    showToast("ProofBundle ready for claim. Submit on-chain or download.");
+    // Save updated claim count
+    const { iv, ciphertext } = await window.encryptData(decryptedKey, vaultData);
+    await window.saveVaultDataToDB(iv, ciphertext, bufferToBase64(vaultData.salt), vaultData);
+    renderVaultUI();
+  } catch(e) {
+    showToast(e.message, true);
+  }
+});
+
+// ========== 9. Helper: Safe Handler ===========
+async function safeHandler(fn) {
+  try { await fn(); }
+  catch (err) {
+    console.error('Handler error:', err);
+    showToast(`Error: ${err.message || err}`, true);
+  }
+}
+
+// ========== 10. Util ===========
+function bufferToBase64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function getTvmBalance(vault) {
+  const unlockedSpent = vault.segments.filter(seg => seg.ownershipChangeCount > 0).length;
+  return Math.floor(unlockedSpent / 12) - (vault.tvmClaimedThisYear || 0);
+}
+function getAvailableTVMClaims(vault) {
+  const spentCount = vault.segments.filter(seg => seg.ownershipChangeCount > 0).length;
+  const totalClaimed = vault.tvmClaimedThisYear || 0;
+  const claimable = Math.floor(spentCount / 12) - totalClaimed;
+  return Math.max(claimable, 0);
+}
+function showToast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = String(msg);
+  t.className = 'toast' + (isError ? ' toast-error' : '');
+  t.style.display = 'block';
+  setTimeout(() => { t.style.display = 'none'; }, 3300);
+}
+</script>
+
