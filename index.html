@@ -1,6 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <!-- Security & Compliance Headers -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+  <meta http-equiv="X-Frame-Options" content="DENY">
+  <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
+  <meta name="referrer" content="no-referrer">
+  <!-- Privacy/Compliance -->
+  <link rel="privacy-policy" href="privacy.html">
   <meta charset="UTF-8" />
   <title>Bio‑Vault | BalanceChain | TVM</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -142,6 +149,11 @@
   <div class="toast" id="toast"></div>
   <!-- Footer -->
   <div class="section" id="footer">
+    <p>
+  <a href="privacy.html" style="color:#ffe164;">Privacy Policy</a> |
+  <a href="terms.html" style="color:#ffe164;">Terms</a>
+  </p>
+
     <p style="color:#fff;">By RR.R — for Humanity. &copy; <span id="currentYear"></span></p>
     <script>document.getElementById('currentYear').textContent = new Date().getFullYear();</script>
   </div>
