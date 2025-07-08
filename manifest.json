@@ -1,9 +1,13 @@
 {
-  "name": "P2P Bio‑Vault",
+  "name": "Bio-Vault | BalanceChain | TVM",
   "short_name": "BioVault",
+  "description": "Audit-proof, pegged, human-effort digital money vault. 1 TVM = 1 USD. BalanceChain protocol.",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#000000"
-  
+  "background_color": "#2f4979",
+  "theme_color": "#ffe164",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
 }
