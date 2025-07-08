@@ -9,20 +9,20 @@
         content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
   <meta http-equiv="X-Frame-Options"      content="DENY">
   <meta http-equiv="Referrer-Policy"      content="strict-origin-when-cross-origin">
-  <meta name="referrer"                  content="no-referrer">
-  <link rel="privacy-policy"             href="privacy.html">
+  <meta name="referrer"                   content="no-referrer">
+  <link rel="privacy-policy"              href="privacy.html">
 
   <!--============================================================================
        PWA & Meta
   =============================================================================-->
-  <meta name="viewport"        content="width=device-width, initial-scale=1.0">
-  <meta name="description"     content="The next-gen digital money vault—pegged, stable, audit-proof. 1 TVM = 1 USD.">
-  <link rel="manifest"         href="./manifest.json">
-  <link rel="icon"             href="icon-192.png">
+  <meta name="viewport"       content="width=device-width, initial-scale=1.0">
+  <meta name="description"    content="The next-gen digital money vault—pegged, stable, audit-proof. 1 TVM = 1 USD.">
+  <link rel="manifest"        href="./manifest.json">
+  <link rel="icon"            href="icon-192.png">
   <title>Bio-Vault | BalanceChain TVM</title>
 
   <!--============================================================================
-       Ethers.js (for on-chain interactions) & Service Worker
+       Ethers.js & Service Worker
   =============================================================================-->
   <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
   <script>
@@ -213,13 +213,16 @@
   </style>
 </head>
 <body>
+  <noscript>
+    <div style="padding:2em; background:#ef4444; color:#fff; text-align:center;">
+      JavaScript is required. Please enable JS or use a compatible browser.
+    </div>
+  </noscript>
 
-  <!--===============================
-     Explainer / Onboarding Tip
-  ===============================-->
+  <!-- Explainer -->
   <div class="explainer-section" role="complementary">
     <h2>BalanceChain: Digital Money. Redefined.</h2>
-    <p><strong>1 TVM = 1 USD. Always. Backed by real human effort, not speculation.</strong></p>
+    <p><strong>1 TVM = 1 USD. Always. Backed by real human effort.</strong></p>
     <div class="explainer-features">
       <div class="explainer-feature">Pegged & Stable</div>
       <div class="explainer-feature">Audit-Proof</div>
@@ -237,16 +240,14 @@
       <button class="audit-btn" onclick="openModal('auditModal')">Audit Peg</button>
     </div>
     <div class="onboarding-tip" id="onboardingTip" style="display:none;">
-      <strong>Tip:</strong> Don’t lose your backup or passphrase—if you do, your TVM are gone forever.
+      <strong>Tip:</strong> Back up your vault now. Lose backup or passphrase → funds are gone forever.
     </div>
   </div>
 
   <!-- Help FAB -->
   <button class="help-fab" aria-label="Help" onclick="openModal('faqModal')">?</button>
 
-  <!--===============================
-     Onboarding Modal
-  ===============================-->
+  <!-- Onboarding Modal -->
   <div id="onboardingModal" class="modal" role="dialog" aria-modal="true">
     <div class="modal-content" tabindex="0">
       <button class="modal-close" onclick="closeModal('onboardingModal')">&times;</button>
@@ -257,36 +258,32 @@
       </div>
       <div class="modal-onboarding-page">
         <h2>Welcome to Bio-Vault</h2>
-        <p>Your vault is the world’s first truly fair, pegged, and audit-proof digital money system.</p>
-        <p><strong>1 TVM = 1 USD. Always. Backed by real human effort.</strong></p>
+        <p>Your vault is the world’s first truly fair, pegged, audit-proof digital money system.</p>
         <button onclick="modalNav('onboardingModal',1)">Next →</button>
       </div>
       <div class="modal-onboarding-page hidden">
         <h2>How It Works</h2>
         <ul class="modal-list">
-          <li>Your keys & proofs stay local.</li>
+          <li>Your keys & proofs remain local.</li>
           <li>Earn & transfer TVM instantly—no banks.</li>
-          <li>Peg never breaks; always 1 TVM = 1 USD.</li>
-          <li>Bridge on-chain or offline as you wish.</li>
+          <li>Peg never breaks: 1 TVM = 1 USD.</li>
+          <li>Bridge on-chain or offline at will.</li>
         </ul>
         <button onclick="modalNav('onboardingModal',2)">Next →</button>
       </div>
       <div class="modal-onboarding-page hidden">
         <h2>Security First</h2>
         <ul class="modal-list">
-          <li><strong>Backup now.</strong> Lose it, lose your money.</li>
-          <li>We can’t recover your vault—only you can.</li>
-          <li>Store passphrase & backup safely offline.</li>
+          <li><strong>Backup now.</strong> Lose it → lose everything.</li>
+          <li>No recovery—vault is fully self-custodial.</li>
+          <li>Store passphrase & backup offline.</li>
         </ul>
         <button onclick="closeModal('onboardingModal')">Got it</button>
       </div>
     </div>
   </div>
 
-  <!--===============================
-     Information Modals
-  ===============================-->
-  <!-- Whitepaper -->
+  <!-- White Paper Modal -->
   <div id="whitepaperModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('whitepaperModal')">&times;</button>
     <div class="modal-nav">
@@ -304,15 +301,15 @@
       <div class="modal-feature">Protocol-Enforced Stability</div>
     </div>
     <ul class="modal-list">
-      <li>Every unit of TVM is cryptographically backed by human effort.</li>
-      <li>No hidden inflation, no mining, no speculation—just real value.</li>
-      <li>Self-custodial & offline-capable, instantly auditable by anyone.</li>
-      <li>The smart contract bridge ensures 100% backing on-chain.</li>
+      <li>Every unit of TVM is backed by cryptographic human-effort proofs.</li>
+      <li>No hidden inflation or mining—pure protocol-enforced value.</li>
+      <li>Self-custodial & offline-capable, with instant auditability.</li>
+      <li>Bridge on-chain for 100% verifiable backing.</li>
     </ul>
     <div class="modal-tip">For the full technical white paper, contact support or join the community.</div>
   </div></div>
 
-  <!-- Audit Peg -->
+  <!-- Audit Modal -->
   <div id="auditModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('auditModal')">&times;</button>
     <div class="modal-nav">
@@ -324,14 +321,14 @@
       <button onclick="openModal('legalModal')">Legal</button>
     </div>
     <h2>Audit the Peg</h2>
-    <p><strong>Why TVM is always $1:</strong> Protocol & smart contract enforce supply and redemption 1:1.</p>
+    <p><strong>Why TVM is always $1:</strong> Supply and redemption are enforced by smart contract.</p>
     <p><strong>Current Peg Status:</strong><br>
-       <span id="auditPegLive">Loading…</span>
+      <span id="auditPegLive">Loading…</span>
     </p>
-    <div class="modal-tip">No one—not even the creators—can break the peg or freeze your funds.</div>
+    <div class="modal-tip">No one—even the creators—can break the peg or freeze your funds.</div>
   </div></div>
 
-  <!-- FAQ -->
+  <!-- FAQ Modal -->
   <div id="faqModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('faqModal')">&times;</button>
     <div class="modal-nav">
@@ -345,16 +342,16 @@
     <h2>FAQ</h2>
     <ul class="modal-list">
       <li><strong>How is TVM always $1?</strong> Peg enforced on-chain by code.</li>
-      <li><strong>What is Bio-IBAN?</strong> Your private, cryptographically secure account ID.</li>
-      <li><strong>What is a Bio-Catch?</strong> A portable batch of segments for P2P transfer.</li>
+      <li><strong>What is Bio-IBAN?</strong> Your private cryptographic account ID.</li>
+      <li><strong>What is Bio-Catch?</strong> A portable batch bundle for P2P transfers.</li>
       <li><strong>What if I lose my vault?</strong> Funds are gone—always back up.</li>
-      <li><strong>Can I bridge to crypto?</strong> Yes—connect your on-chain wallet.</li>
+      <li><strong>Can I bridge on-chain?</strong> Yes—connect your wallet.</li>
       <li><strong>Is it private?</strong> Keys & proofs never leave your device unless you export.</li>
-      <li><strong>Audit-proof?</strong> Full history is provable & exportable.</li>
+      <li><strong>Audit-proof?</strong> Full segment history is provable & exportable.</li>
     </ul>
   </div></div>
 
-  <!-- Support -->
+  <!-- Support Modal -->
   <div id="supportModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('supportModal')">&times;</button>
     <div class="modal-nav">
@@ -366,13 +363,11 @@
       <button onclick="openModal('legalModal')">Legal</button>
     </div>
     <h2>Support</h2>
-    <p>
-      Email us at <a href="mailto:support@shemoney.app">support@shemoney.app</a><br>
-      Join our Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a>
-    </p>
+    <p>Email: <a href="mailto:support@shemoney.app">support@shemoney.app</a></p>
+    <p>Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a></p>
   </div></div>
 
-  <!-- Community -->
+  <!-- Community Modal -->
   <div id="communityModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('communityModal')">&times;</button>
     <div class="modal-nav">
@@ -384,13 +379,11 @@
       <button onclick="openModal('legalModal')">Legal</button>
     </div>
     <h2>Community</h2>
-    <p>
-      Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a><br>
-      Discord:  <a href="https://discord.gg/yourserver" target="_blank">discord.gg/yourserver</a>
-    </p>
+    <p>Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a></p>
+    <p>Discord:  <a href="https://discord.gg/yourserver" target="_blank">discord.gg/yourserver</a></p>
   </div></div>
 
-  <!-- Legal -->
+  <!-- Legal Modal -->
   <div id="legalModal" class="modal"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('legalModal')">&times;</button>
     <div class="modal-nav">
@@ -402,35 +395,35 @@
       <button class="active" onclick="openModal('legalModal')">Legal</button>
     </div>
     <h2>Legal & Privacy</h2>
-    <p><strong>Terms:</strong> Experimental & open-source. You are responsible for your funds.</p>
+    <p><strong>Terms:</strong> Experimental and open-source. You are responsible for your funds.</p>
     <p><strong>Privacy:</strong> No data leaves your device unless you export it.</p>
   </div></div>
 
-  <!-- Change Passphrase -->
-  <div id="changePassModal" class="modal"><div class="modal-content" tabindex="0">
+  <!-- Change Passphrase Modal -->
+  <div id="changePassModal" class="modal" role="dialog" aria-modal="true"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('changePassModal')">&times;</button>
     <h3>Change Passphrase</h3>
-    <label for="oldPassInput">Old Passphrase:</label>
+    <label>Old Passphrase:</label>
     <div class="pass-wrap">
-      <input type="password" id="oldPassInput" class="input-field" placeholder="Current">
+      <input type="password" id="oldPassInput" class="input-field" placeholder="Current passphrase">
       <button class="show-hide-btn" onclick="togglePassword('oldPassInput',this)">Show</button>
     </div>
-    <label for="newPassInput">New Passphrase:</label>
+    <label>New Passphrase:</label>
     <div class="pass-wrap">
-      <input type="password" id="newPassInput" class="input-field" placeholder="New">
+      <input type="password" id="newPassInput" class="input-field" placeholder="New passphrase">
       <button class="show-hide-btn" onclick="togglePassword('newPassInput',this)">Show</button>
     </div>
-    <label for="confirmNewPassInput">Confirm New:</label>
+    <label>Confirm New:</label>
     <div class="pass-wrap">
-      <input type="password" id="confirmNewPassInput" class="input-field" placeholder="Confirm">
+      <input type="password" id="confirmNewPassInput" class="input-field" placeholder="Confirm new">
       <button class="show-hide-btn" onclick="togglePassword('confirmNewPassInput',this)">Show</button>
     </div>
     <button onclick="closeModal('changePassModal')">Cancel</button>
     <button id="changePassSaveBtn">Save New Passphrase</button>
   </div></div>
 
-  <!-- Confirmation Dialog -->
-  <div id="confirmModal" class="modal"><div class="modal-content" tabindex="0">
+  <!-- Confirmation Modal -->
+  <div id="confirmModal" class="modal" role="dialog" aria-modal="true"><div class="modal-content" tabindex="0">
     <button class="modal-close" onclick="closeModal('confirmModal')">&times;</button>
     <h3 id="confirmModalTitle">Confirm</h3>
     <p id="confirmModalMessage">Are you sure?</p>
@@ -439,22 +432,22 @@
   </div></div>
 
   <!-- Locked Screen -->
-  <div id="lockedScreen" class="section">
+  <div id="lockedScreen" class="section" aria-label="Locked screen">
     <h1>Bio-Vault</h1>
     <h2>Your TVM, truly yours.</h2>
     <button id="enterVaultBtn">Enter Vault</button>
   </div>
 
   <!-- Passphrase Modal -->
-  <div id="passModal" class="modal"><div class="popup-content" tabindex="0">
+  <div id="passModal" class="modal" role="dialog" aria-modal="true"><div class="popup-content" tabindex="0">
     <h3 id="passModalTitle">Enter Passphrase</h3>
     <input type="password" id="passModalInput" class="input-field" placeholder="Passphrase">
-    <input type="password" id="passModalConfirmInput" class="input-field hidden" placeholder="Confirm Passphrase">
+    <input type="password" id="passModalConfirmInput" class="input-field hidden" placeholder="Confirm passphrase">
     <button id="passModalCancelBtn">Cancel</button>
     <button id="passModalSaveBtn">Save</button>
   </div></div>
 
-  <!-- Security Buttons -->
+  <!-- Security Buttons (shown post-unlock) -->
   <div id="securityBtns" class="section hidden">
     <button id="lockVaultBtn">Lock Vault</button>
     <button id="terminateBtn" style="background:#ef4444;">Terminate Vault</button>
@@ -469,11 +462,13 @@
       <button id="copyBioIBANBtn">Copy IBAN</button>
       <button id="showBioCatchBtn">Show Bio-Catch</button>
     </div>
+
     <div class="section" id="balanceContainer">
       <span id="tvmBalance">Balance: 0 TVM</span><br>
       <span id="usdBalance">Equivalent: 0.00 USD</span><br>
       <span id="auditPegLive"></span>
     </div>
+
     <div class="section" id="bioLineUTCContainer">
       <div id="bioLineText">🔄 BonusConstant: 0</div>
       <div id="utcTime">UTC Time: …</div>
@@ -488,7 +483,7 @@
       <span id="walletStatus" style="margin-left:12px;font-size:14px;"></span>
     </div>
     <div class="section" id="tvmClaimSection">
-      <span id="tvmClaimable"></span>
+      <span id="tvmClaimable">TVM Claimable: 0</span>
       <button id="claimTvmBtn">Claim TVM</button>
       <span id="tvmClaimResult" style="margin-left:12px;font-size:14px;"></span>
     </div>
@@ -535,22 +530,20 @@
       </table>
     </div>
 
-    <div class="section" id="p2pInfo">
-      (1 USD = 12 TVM — protocol-pegged. 
+    <div class="section" id="p2pInfo" style="text-align:center;">
+      <em>(1 USD = 12 TVM — protocol-pegged. 
       <button onclick="openModal('whitepaperModal')" style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;">
-        How?</button>)
+        How?</button>)</em>
     </div>
   </div>
 
   <!-- Bio-Catch Popup -->
-  <div id="bioCatchPopup" class="popup" role="dialog" aria-modal="true">
-    <div class="popup-content" tabindex="0">
-      <h3>Your Bio-Catch Number</h3>
-      <p id="bioCatchNumberText"></p>
-      <button id="copyBioCatchBtn">Copy</button>
-      <button id="closeBioCatchPopup">Close</button>
-    </div>
-  </div>
+  <div id="bioCatchPopup" class="popup" role="dialog" aria-modal="true"><div class="popup-content" tabindex="0">
+    <h3>Your Bio-Catch Number</h3>
+    <p id="bioCatchNumberText"></p>
+    <button id="copyBioCatchBtn">Copy</button>
+    <button id="closeBioCatchPopup">Close</button>
+  </div></div>
 
   <!-- Toast -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -558,64 +551,13 @@
   <!-- Footer -->
   <div class="section" style="text-align:center; margin:40px 0 20px;">
     <a href="privacy.html" style="color:#ffe164; margin-right:12px;">Privacy Policy</a>
-    <a href="terms.html" style="color:#ffe164;">Terms of Service</a><br>
+    <a href="terms.html"    style="color:#ffe164;">Terms of Service</a><br>
     <small>By RR.R — for Humanity. © <span id="currentYear"></span></small>
     <script>document.getElementById('currentYear').textContent = new Date().getFullYear();</script>
   </div>
 
   <!--============================================================================
-       Inline Utilities for Modals & Toggles
-  =============================================================================-->
-  <script>
-    function openModal(id) {
-      document.querySelectorAll('.modal').forEach(m=>m.style.display='none');
-      const m=document.getElementById(id);
-      if(m){ m.style.display='flex';
-        const f=m.querySelector('[tabindex="0"]');
-        if(f) setTimeout(()=>f.focus(),100);
-      }
-      document.body.style.overflow='hidden';
-    }
-    function closeModal(id) {
-      const m=document.getElementById(id);
-      if(m) m.style.display='none';
-      document.body.style.overflow='';
-    }
-    function modalNav(modalId,idx) {
-      const m=document.getElementById(modalId);
-      const pages=m.querySelectorAll('.modal-onboarding-page');
-      pages.forEach((p,i)=>p.classList.toggle('hidden',i!==idx));
-      m.querySelectorAll('.modal-nav button')
-       .forEach((b,i)=>b.classList.toggle('active',i===idx));
-    }
-    function togglePassword(inputId,btn) {
-      const i=document.getElementById(inputId);
-      if(i.type==='password'){ i.type='text'; btn.textContent='Hide'; }
-      else { i.type='password'; btn.textContent='Show'; }
-    }
-    document.addEventListener('keydown',e=>{
-      if(e.key==='Escape'){ document.querySelectorAll('.modal').forEach(m=>m.style.display='none');
-        document.body.style.overflow=''; }
-    });
-    document.querySelectorAll('.modal').forEach(modal=>{
-      modal.addEventListener('click',e=>{
-        if(e.target===modal){ modal.style.display='none'; document.body.style.overflow=''; }
-      });
-    });
-
-    // Paging helper
-    let txPage=0,pageSize=10;
-    function renderTransactions(){ /* implemented in main.js */ }
-    document.getElementById('txPrevBtn')?.addEventListener('click',()=>{
-      txPage--; renderTransactions();
-    });
-    document.getElementById('txNextBtn')?.addEventListener('click',()=>{
-      txPage++; renderTransactions();
-    });
-  </script>
-
-  <!--============================================================================
-       Main Application Script
+       Main Application Script (all UI logic now lives here)
   =============================================================================-->
   <script type="module" src="main.js"></script>
 </body>
