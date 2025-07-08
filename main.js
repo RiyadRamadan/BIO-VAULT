@@ -1,573 +1,424 @@
-'use strict';
+/**********************************************************************
+ * BalanceChain main.js — Points 1-6,10 — Secure IndexedDB, AES, Multi-Device
+ **********************************************************************/
 
-/* ==== CONFIG ==== */
-const SEGMENTS_PER_YEAR = 12000;
-const INITIAL_SEGMENTS_UNLOCKED = 1200;
-const EXCHANGE_RATE = 12;
-const INITIAL_BIO_CONSTANT = 1736565605;
-const FOUNDER_KEY = "BALANCECHAIN-FOUNDER-KEY"; // <-- set a unique, non-leaking system constant
-const TVM_CONTRACT_ADDRESS = "0xYourTvmContractAddress";
-const TVM_CONTRACT_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function transfer(address,uint256) returns (bool)"
-];
+/******************** GLOBAL CONSTANTS & PROTOCOL CAPACITY ********************/
+const GENESIS_BIO_CONST = 1736565605;
+const SEGMENTS_TOTAL = 12000, SEGMENTS_UNLOCKED = 1200;
+const KEY_HASH_SALT = 'BalanceChainAppV1';
+const SEGMENTS_PER_DAY = 360, SEGMENTS_PER_MONTH = 3600, SEGMENTS_PER_YEAR = 10800;
+const HISTORY_MAX = 20;
+const DB_NAME = "BalanceChainVaultDB", DB_VERSION = 1, VAULT_STORE = "vaultStore";
+const MAX_AUTH_ATTEMPTS = 5, LOCKOUT_DURATION_SECONDS = 3600;
 
-/* ==== STATE ==== */
-let cryptoKey = null, encryptedVault = null, vaultData = null, isVaultUnlocked = false;
-let ethProvider = null, ethAccount = null, ethChainId = null;
-let idleTimer;
-
-/* ==== UI HOOK ==== */
-const $ = id => document.getElementById(id);
-
-function showToast(msg, error) {
-  const toast = $('toast');
-  if (!toast) return;
-  toast.classList.remove('toast-error');
-  if (error) toast.classList.add('toast-error');
-  toast.textContent = msg;
-  toast.style.display = 'block';
-  setTimeout(() => { toast.style.display = 'none'; }, 3400);
+/******************** INDEXEDDB UTILS & ENCRYPTION ********************/
+function bufferToBase64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
 }
-
-/* ==== CRYPTO / WEBAUTHN ==== */
-async function createWebAuthnCredential() {
-  const cred = await navigator.credentials.create({
-    publicKey: {
-      challenge: window.crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: "BioVault" },
-      user: { id: Uint8Array.from(String(Date.now())), name: "user@balancechain", displayName: "BioVault User" },
-      pubKeyCredParams: [
-  {alg: -7, type: "public-key"},
-  {alg: -257, type: "public-key"}
-],
-
-      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-      timeout: 60000, attestation: "direct"
-    }
-  });
-  if (!cred || !cred.rawId) throw new Error("Credential registration failed");
-  localStorage.setItem('bioVaultCredentialId', btoa(String.fromCharCode(...new Uint8Array(cred.rawId))));
-  return cred;
+function base64ToBuffer(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for(let i=0; i<bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
-async function unlockWithWebAuthn() {
-  const credIdB64 = localStorage.getItem('bioVaultCredentialId');
-  if (!credIdB64) throw new Error("No credential registered");
-  const credId = Uint8Array.from(atob(credIdB64), c => c.charCodeAt(0));
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge: window.crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{ id: credId, type: "public-key", transports: ["internal"] }],
-      userVerification: "required", timeout: 60000
-    }
-  });
-  const hash = await window.crypto.subtle.digest("SHA-256", assertion.response.signature);
-  cryptoKey = await window.crypto.subtle.importKey('raw', hash, {name:'AES-GCM'}, false, ['encrypt','decrypt']);
-  return {cryptoKey, assertion};
-}
-async function encryptVault(obj, key) {
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(JSON.stringify(obj));
-  const ct = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
-  return { iv: Array.from(iv), ct: Array.from(new Uint8Array(ct)) };
-}
-async function decryptVault(encObj, key) {
-  const iv = new Uint8Array(encObj.iv);
-  const ctBuf = new Uint8Array(encObj.ct);
-  const pt = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ctBuf);
-  return JSON.parse(new TextDecoder().decode(pt));
-}
-async function deriveKeyFromPassword(password, salt) {
-  const enc = new TextEncoder();
-  const keyMaterial = await window.crypto.subtle.importKey(
-    "raw", enc.encode(password), {name: "PBKDF2"}, false, ["deriveKey"]
-  );
-  return await window.crypto.subtle.deriveKey(
-    {name: "PBKDF2", salt: enc.encode(salt), iterations: 100000, hash: "SHA-256"},
-    keyMaterial, {name: "AES-GCM", length: 256}, false, ["encrypt", "decrypt"]
-  );
-}
-
-/* ==== SEGMENT MODEL ==== */
-function buildGenesisVault(credentialId, joinTS) {
-  // Use biometric key (credentialId) + bio-constant for IBAN. Founder key and genesis bio-constant for originality.
-  const baseBio = INITIAL_BIO_CONSTANT + (joinTS - INITIAL_BIO_CONSTANT);
-  let segments = [];
-  for(let i=1;i<=SEGMENTS_PER_YEAR;i++) {
-    const unlocked = i <= INITIAL_SEGMENTS_UNLOCKED;
-    segments.push({
-      segmentIndex: i,
-      amount: 1,
-      founderKey: FOUNDER_KEY,
-      genesisBioConst: INITIAL_BIO_CONSTANT,
-      originalOwnerKey: credentialId,
-      originalOwnerTS: joinTS,
-      originalBioConst: baseBio,
-      previousOwnerKey: null,
-      currentOwnerKey: unlocked ? credentialId : null,
-      unlocked,
-      last_update: joinTS,
-      ownershipChangeProof: null
-    });
-  }
-  return {
-    bioIBAN: `BIO${credentialId.slice(0,10)}-${baseBio}`,
-    initialBioConstant: baseBio,
-    joinTimestamp: joinTS,
-    credentialId,
-    segments,
-    balanceTVM: INITIAL_SEGMENTS_UNLOCKED,
-    balanceUSD: +(INITIAL_SEGMENTS_UNLOCKED / EXCHANGE_RATE).toFixed(2),
-    transactions: [],
-    userWallet: "",
-    auditTrail: [],
-  };
-}
-function getSpendableSegments() {
-  return vaultData.segments.filter(s => s.unlocked && s.currentOwnerKey === vaultData.credentialId);
-}
-function unlockNewSegments(count, nowSec) {
-  let unlocked = 0;
-  for (let i = 0; i < vaultData.segments.length && unlocked < count; ++i) {
-    let seg = vaultData.segments[i];
-    if (!seg.unlocked) {
-      seg.currentOwnerKey = vaultData.credentialId;
-      seg.unlocked = true;
-      seg.last_update = nowSec;
-      seg.ownershipChangeProof = null;
-      unlocked++;
-    }
-  }
-  return unlocked;
-}
-
-/* ==== BIOMETRIC VALIDATION ON EVERY ACTION ==== */
-async function requireBiometricBeforeCriticalAction() {
-  try {
-    const {cryptoKey: key, assertion} = await unlockWithWebAuthn();
-    const assertionHash = await window.crypto.subtle.digest("SHA-256", assertion.response.signature);
-    return {
-      assertionHash: Array.from(new Uint8Array(assertionHash)).map(b => b.toString(16).padStart(2, '0')).join(''),
-      timestamp: Math.floor(Date.now() / 1000),
-      credentialId: vaultData.credentialId
+async function openVaultDB() {
+  return new Promise((resolve, reject) => {
+    let req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = evt => {
+      let db = evt.target.result;
+      if(!db.objectStoreNames.contains(VAULT_STORE))
+        db.createObjectStore(VAULT_STORE, { keyPath:'id' });
     };
-  } catch (err) {
-    showToast("Biometric verification failed or canceled", true);
-    return null;
-  }
-}
-
-/* ==== METAMASK / ETHEREUM ==== */
-async function connectMetaMask() {
-  if (!window.ethereum) { showToast("Install MetaMask", true); return; }
-  ethProvider = window.ethereum;
-  try {
-    let accounts = await ethProvider.request({ method: 'eth_requestAccounts' });
-    ethAccount = accounts[0];
-    ethChainId = await ethProvider.request({ method: 'eth_chainId' });
-    $('userWalletAddress').value = ethAccount;
-    fetchTvmOnChainBalance();
-    showToast("MetaMask connected");
-  } catch (e) { showToast("MetaMask error", true); }
-}
-$('autoConnectWalletBtn').onclick = connectMetaMask;
-if (window.ethereum) {
-  window.ethereum.on('accountsChanged', function (accounts) {
-    ethAccount = accounts[0];
-    $('userWalletAddress').value = ethAccount;
-    fetchTvmOnChainBalance();
-  });
-  window.ethereum.on('chainChanged', function (chainId) {
-    ethChainId = chainId;
-    fetchTvmOnChainBalance();
+    req.onsuccess = evt => resolve(evt.target.result);
+    req.onerror = evt => reject(evt.target.error);
   });
 }
-async function fetchTvmOnChainBalance() {
-  if (!ethProvider || !ethAccount) return;
-  const provider = new ethers.providers.Web3Provider(ethProvider);
-  const tvmContract = new ethers.Contract(TVM_CONTRACT_ADDRESS, TVM_CONTRACT_ABI, provider);
-  try {
-    let balance = await tvmContract.balanceOf(ethAccount);
-    let tvm = ethers.utils.formatUnits(balance, 18);
-    showToast(`On-chain TVM: ${tvm}`);
-  } catch (e) { showToast("Fetch TVM failed", true); }
-}
-async function sendTVMtoOnchain(receiver, amount) {
-  if (!ethProvider || !ethAccount) { showToast("Connect MetaMask", true); return; }
-  const provider = new ethers.providers.Web3Provider(ethProvider);
-  const signer = provider.getSigner();
-  const tvmContract = new ethers.Contract(TVM_CONTRACT_ADDRESS, TVM_CONTRACT_ABI, signer);
-  try {
-    let tx = await tvmContract.transfer(receiver, ethers.utils.parseUnits(String(amount), 18));
-    await tx.wait();
-    showToast("Sent TVM on-chain");
-    fetchTvmOnChainBalance();
-  } catch (e) {
-    showToast("On-chain send failed", true);
-  }
-}
-
-/* ==== VAULT BOOT/UNLOCK ==== */
-$('enterVaultBtn').onclick = async () => {
-  // No passphrase, no user friction
-  if (!localStorage.getItem('bioVaultCredentialId')) {
-    try { await createWebAuthnCredential(); showToast("WebAuthn registered. Now unlock."); }
-    catch (e) { showToast("Biometric registration failed", true); return; }
-  }
-  await unlockVaultFlow();
-};
-async function unlockVaultFlow() {
-  try {
-    let {cryptoKey: key} = await unlockWithWebAuthn();
-    cryptoKey = key;
-    if (!localStorage.getItem('bioVaultEncrypted')) {
-      vaultData = buildGenesisVault(localStorage.getItem('bioVaultCredentialId'), Math.floor(Date.now()/1000));
-      encryptedVault = await encryptVault(vaultData, cryptoKey);
-      localStorage.setItem('bioVaultEncrypted', JSON.stringify(encryptedVault));
-    } else {
-      encryptedVault = JSON.parse(localStorage.getItem('bioVaultEncrypted'));
-      vaultData = await decryptVault(encryptedVault, cryptoKey);
-    }
-    isVaultUnlocked = true;
-    $('lockedScreen').classList.add('hidden');
-    $('vaultUI').classList.remove('hidden');
-    populateWalletUI();
-    showToast("Vault unlocked!");
-    resetIdleTimer();
-    updateVaultButtons();
-  } catch (err) { showToast("Unlock failed", true); }
-}
-async function saveVault() {
-  if (!cryptoKey || !vaultData) return;
-  encryptedVault = await encryptVault(vaultData, cryptoKey);
-  localStorage.setItem('bioVaultEncrypted', JSON.stringify(encryptedVault));
-}
-
-/* ==== UI: WALLET, TRANSACTIONS ==== */
-function populateWalletUI() {
-  if (!vaultData) return;
-  $('bioibanInput').value = vaultData.bioIBAN;
-  $('tvmBalance').textContent = `Balance: ${vaultData.balanceTVM} TVM`;
-  $('usdBalance').textContent = `Equivalent to ${vaultData.balanceUSD} USD`;
-  renderTransactionTable();
-  updateVaultButtons();
-}
-function renderTransactionTable() {
-  const tbody = $('transactionBody');
-  tbody.innerHTML = '';
-  if (!vaultData || !vaultData.transactions) return;
-  vaultData.transactions.slice().reverse().forEach(tx => {
-    let badge = tx.onChain ? '<span class="badge badge-chain">On-Chain</span>' : '';
-    let row = document.createElement('tr');
-    row.innerHTML = `<td>${tx.bioIBAN || ''}</td><td>${tx.bioCatch || ''}</td>
-      <td>${tx.amount || ''}</td><td>${tx.date || ''}</td><td>${tx.status || ''} ${badge}</td>`;
-    tbody.appendChild(row);
+async function saveVaultDataToDB(iv, ciphertext, saltBase64, vaultData) {
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([VAULT_STORE],'readwrite');
+    const store = tx.objectStore(VAULT_STORE);
+    store.put({
+      id:'vaultData',
+      iv: bufferToBase64(iv),
+      ciphertext: bufferToBase64(ciphertext),
+      salt: saltBase64,
+      lockoutTimestamp: vaultData.lockoutTimestamp||null,
+      authAttempts: vaultData.authAttempts||0
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = err => reject(err);
   });
 }
-
-/* ==== CATCH OUT / IN (SEND/RECEIVE TVM with Biometric Proof) ==== */
-$('catchOutBtn').onclick = async () => {
-  const proof = await requireBiometricBeforeCriticalAction();
-  if (!proof) return;
-  if (!isVaultUnlocked) return showToast("Unlock first!", true);
-  const recv = $('receiverBioIBAN').value.trim();
-  const amt = parseInt($('catchOutAmount').value.trim(), 10);
-  if (!recv || !amt || isNaN(amt) || amt < 1) return showToast("Enter valid receiver & amount", true);
-  if (recv === vaultData.bioIBAN) return showToast("Cannot send to self", true);
-
-  const spendable = getSpendableSegments();
-  if (spendable.length < amt) return showToast("Insufficient unlocked TVM", true);
-
-  const nowSec = proof.timestamp;
-  for (let i = 0; i < amt; ++i) {
-    let seg = spendable[i];
-    seg.previousOwnerKey   = seg.currentOwnerKey;
-    seg.currentOwnerKey    = null;
-    seg.unlocked           = false;
-    seg.last_update        = nowSec;
-    seg.ownershipChangeProof = proof;
-  }
-  vaultData.balanceTVM -= amt;
-  vaultData.balanceUSD = +(vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2);
-  vaultData.transactions.push({
-    bioIBAN: recv,
-    bioCatch: 'TX-' + nowSec,
-    amount: amt,
-    date: new Date(nowSec*1000).toISOString().replace('T',' ').slice(0,19),
-    status: 'Completed'
-  });
-  vaultData.auditTrail.push({ type:"out", to:recv, amount:amt, ts:nowSec, proof });
-  await saveVault();
-  populateWalletUI();
-  showToast(`Sent ${amt} TVM`);
-  resetIdleTimer();
-};
-
-$('catchInBtn').onclick = async () => {
-  const proof = await requireBiometricBeforeCriticalAction();
-  if (!proof) return;
-  if (!isVaultUnlocked) return showToast("Unlock first!", true);
-  const bioCatch = $('catchInBioCatch').value.trim();
-  const amt = parseInt($('catchInAmount').value.trim(), 10);
-  if (!bioCatch || !amt || isNaN(amt) || amt < 1) return showToast("Enter valid Bio-Catch & amount", true);
-  const nowSec = proof.timestamp;
-  let unlockedCount = unlockNewSegments(amt, nowSec);
-  let count = 0;
-  for (let i = 0; i < vaultData.segments.length && count < amt; ++i) {
-    let seg = vaultData.segments[i];
-    if (seg.unlocked && !seg.ownershipChangeProof) {
-      seg.ownershipChangeProof = proof;
-      count++;
-    }
-  }
-  vaultData.balanceTVM += unlockedCount;
-  vaultData.balanceUSD = +(vaultData.balanceTVM / EXCHANGE_RATE).toFixed(2);
-  vaultData.transactions.push({
-    bioIBAN: vaultData.bioIBAN,
-    bioCatch: bioCatch,
-    amount: amt,
-    date: new Date(nowSec*1000).toISOString().replace('T',' ').slice(0,19),
-    status: 'Received'
-  });
-  vaultData.auditTrail.push({ type:"in", from:bioCatch, amount:amt, ts:nowSec, proof });
-  await saveVault();
-  populateWalletUI();
-  showToast(`Received ${amt} TVM`);
-  resetIdleTimer();
-};
-
-/* ==== BIO-IBAN COPY ==== */
-$('copyBioIBANBtn').onclick = () => {
-  if (!$('bioibanInput').value) return showToast("No Bio-IBAN to copy", true);
-  navigator.clipboard.writeText($('bioibanInput').value).then(() => showToast("Bio-IBAN copied!"));
-};
-
-/* ==== WALLET SAVE ==== */
-$('saveWalletBtn').onclick = async () => {
-  if (!ethAccount) { showToast("Connect MetaMask first", true); return; }
-  vaultData.userWallet = ethAccount;
-  await saveVault();
-  showToast("Wallet address saved");
-};
-
-/* ==== ON-CHAIN TVM SEND (double-click to send on-chain) ==== */
-$('catchOutBtn').ondblclick = async () => {
-  const receiver = prompt("ETH address to send TVM:");
-  const amt = parseFloat(prompt("How many TVM to send on-chain?"));
-  if (receiver && amt && amt > 0) await sendTVMtoOnchain(receiver, amt);
-};
-
-/* ==== EXPORT / IMPORT ==== */
-$('exportBackupBtn').onclick = () => {
-  const enc = localStorage.getItem('bioVaultEncrypted');
-  const blob = new Blob([enc], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'vault_backup.json';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast("Vault exported");
-};
-$('importVaultFileInput').onchange = function() {
-  const file = this.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      localStorage.setItem('bioVaultEncrypted', e.target.result);
-      showToast("Vault imported. Please unlock.");
-    } catch (err) {
-      showToast("Import failed", true);
-    }
-  };
-  reader.readAsText(file);
-};
-
-/* ==== EXPORT TRANSACTIONS CSV ==== */
-$('exportBtn').onclick = () => {
-  if (!vaultData) return showToast("Unlock first!", true);
-  const csv = ["BioIBAN,BioCatch,Amount,Date,Status"];
-  vaultData.transactions.forEach(tx =>
-    csv.push([tx.bioIBAN, tx.bioCatch, tx.amount, tx.date, tx.status].join(','))
-  );
-  const blob = new Blob([csv.join('\n')], {type:'text/csv'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'transactions.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast("Transactions exported");
-};
-
-/* ==== EXPORT FRIENDLY BACKUP (Password protected) ==== */
-$('exportFriendlyBtn').onclick = async () => {
-  if (!vaultData) return showToast("Unlock first!", true);
-  const pass = prompt("Password for backup (keep safe!):");
-  if (!pass) return showToast("Export canceled");
-  const salt = String(Date.now());
-  const key = await deriveKeyFromPassword(pass, salt);
-  const enc = await encryptVault(vaultData, key);
-  enc._salt = salt;
-  const blob = new Blob([JSON.stringify(enc)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'vault_friendly_backup.json';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast("Password-protected backup exported");
-};
-
-/* ==== IMPORT PASSWORD-PROTECTED BACKUP ==== */
-$('importVaultFileInput').onchange = function() {
-  const file = this.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async function(e) {
-    try {
-      const enc = JSON.parse(e.target.result);
-      if (enc._salt) {
-        const pass = prompt("Enter password to restore backup:");
-        if (!pass) return showToast("Import canceled");
-        const key = await deriveKeyFromPassword(pass, enc._salt);
-        vaultData = await decryptVault(enc, key);
-        isVaultUnlocked = true;
-        populateWalletUI();
-        showToast("Backup imported (password verified)");
+async function loadVaultDataFromDB() {
+  const db = await openVaultDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([VAULT_STORE],'readonly');
+    const store = tx.objectStore(VAULT_STORE);
+    const getReq = store.get('vaultData');
+    getReq.onsuccess = () => {
+      if(getReq.result){
+        try{
+          let iv = base64ToBuffer(getReq.result.iv);
+          let ciph = base64ToBuffer(getReq.result.ciphertext);
+          let s = getReq.result.salt ? base64ToBuffer(getReq.result.salt) : null;
+          resolve({
+            iv, ciphertext:ciph, salt:s,
+            lockoutTimestamp:getReq.result.lockoutTimestamp||null,
+            authAttempts:getReq.result.authAttempts||0
+          });
+        } catch(err){
+          console.error("Error decoding stored data =>", err);
+          resolve(null);
+        }
       } else {
-        // Legacy (no password)
-        localStorage.setItem('bioVaultEncrypted', e.target.result);
-        showToast("Vault imported. Please unlock.");
+        resolve(null);
       }
-    } catch (err) {
-      showToast("Import failed", true);
-    }
-  };
-  reader.readAsText(file);
-};
+    };
+    getReq.onerror = err => reject(err);
+  });
+}
+async function deriveKeyFromPIN(pin, salt) {
+  const enc = new TextEncoder();
+  const pinBytes = enc.encode(pin);
+  const keyMaterial = await crypto.subtle.importKey('raw', pinBytes, { name:'PBKDF2' }, false, ['deriveKey']);
+  return crypto.subtle.deriveKey({
+    name:'PBKDF2', salt, iterations:100000, hash:'SHA-256'
+  }, keyMaterial, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+}
+async function encryptData(key, dataObj) {
+  const enc = new TextEncoder();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = enc.encode(JSON.stringify(dataObj));
+  const ciphertext = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plaintext);
+  return { iv, ciphertext };
+}
+async function decryptData(key, iv, ciphertext) {
+  const dec = new TextDecoder();
+  const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ciphertext);
+  return JSON.parse(dec.decode(plainBuf));
+}
 
-/* ==== MODAL NAV / OPEN / CLOSE / FOCUS ==== */
-function openModal(id) {
-  document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
-  const modal = $(id);
-  if (modal) {
-    modal.style.display = 'flex';
-    setTimeout(() => {
-      const input = modal.querySelector('input,button,[tabindex="0"]');
-      if (input) input.focus();
-    }, 100);
+/******************** ADVANCED PRIVACY & KEY SALTING ********************/
+function getAppSalt() {
+  let salt = localStorage.getItem('bc_app_salt');
+  if (!salt) {
+    salt = crypto.getRandomValues(new Uint8Array(16)).join('');
+    localStorage.setItem('bc_app_salt', salt);
+  }
+  return salt;
+}
+async function hashDeviceKeyWithSalt(publicKeyBuffer, extraSalt = '') {
+  const appSalt = getAppSalt();
+  const combinedSalt = KEY_HASH_SALT + appSalt + extraSalt;
+  const salted = new Uint8Array([...new Uint8Array(publicKeyBuffer), ...new TextEncoder().encode(combinedSalt)]);
+  const hashBuffer = await window.crypto.subtle.digest('SHA-256', salted);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/******************** BIOMETRIC KEY MANAGEMENT ********************/
+async function performBiometricAuthenticationForCreation() {
+  try {
+    const publicKey = {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: "Bio-Vault" },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "bio-user", displayName: "Bio User" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+      timeout: 60000, attestation: "none"
+    };
+    const credential = await navigator.credentials.create({ publicKey });
+    if (!credential) throw new Error("Biometric creation returned null");
+    return credential;
+  } catch (err) {
+    console.error("Biometric creation error:", err);
+    throw err;
   }
 }
-function closeModal(id) {
-  const modal = $(id);
-  if (modal) modal.style.display = 'none';
+
+/******************** CRYPTOGRAPHIC PROOFS ********************/
+async function sha256Hex(strOrBuf) {
+  const data = typeof strOrBuf === "string" ? new TextEncoder().encode(strOrBuf) : strOrBuf;
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-function modalNav(modalId, idx) {
-  const modal = $(modalId);
-  if (!modal) return;
-  const pages = modal.querySelectorAll('.modal-onboarding-page');
-  const navBtns = modal.querySelectorAll('.modal-nav button');
-  pages.forEach((page, i) => page.classList.toggle('hidden', i !== idx));
-  navBtns.forEach((btn, i) => btn.classList.toggle('active', i === idx));
+async function computeOwnershipProof(segment) {
+  const input = [
+    segment.segmentIndex, segment.currentOwnerKey, segment.currentOwnerTS,
+    segment.ownershipChangeCount, segment.previousOwnerKey, segment.previousOwnerTS, segment.previousBioConst
+  ].join('|');
+  return await sha256Hex(input);
+}
+async function computeSpentProof(segment) {
+  const input = [
+    segment.originalBioConst, segment.previousBioConst, segment.segmentIndex, "SPENT"
+  ].join('|');
+  return await sha256Hex(input);
+}
+async function computeUnlockIntegrityProof(segment) {
+  const input = [
+    segment.segmentIndex, segment.unlockIndexRef, "UNLOCK"
+  ].join('|');
+  return await sha256Hex(input);
 }
 
-/* ==== BIO-CATCH POPUP ==== */
-$('closeBioCatchPopup').onclick = () => $('bioCatchPopup').style.display = 'none';
-$('copyBioCatchBtn').onclick = () => {
-  const txt = $('bioCatchNumberText').textContent;
-  if (txt) navigator.clipboard.writeText(txt).then(()=>showToast("Bio-Catch copied!"));
-};
-
-/* ==== LIVE AUDIT PEG VALUE ==== */
-async function updateAuditPeg() {
-  if ($('auditPegLive'))
-    $('auditPegLive').textContent = '1 TVM = 1 USD (Protocol Peg enforced)';
+/******************** CAP ENFORCEMENT ********************/
+function getPeriodStrings(nowTS) {
+  const d = new Date(nowTS * 1000);
+  return { day: d.toISOString().slice(0, 10), month: d.toISOString().slice(0, 7), year: d.getFullYear().toString() };
 }
-if ($('auditPegLive')) updateAuditPeg();
-
-/* ==== UTC TIME LIVE ==== */
-function updateUTC() {
-  if ($('utcTime')) $('utcTime').textContent = 'UTC Time: ' + new Date().toISOString().replace('T',' ').slice(0,19);
-  setTimeout(updateUTC, 1000);
+function checkAndRecordUnlock(vault, nowTS, count = 1) {
+  const ur = vault.unlockRecords;
+  const { day, month, year } = getPeriodStrings(nowTS);
+  if (ur.day !== day) { ur.day = day; ur.dailyCount = 0; }
+  if (ur.month !== month) { ur.month = month; ur.monthlyCount = 0; }
+  if (ur.year !== year) { ur.year = year; ur.yearlyCount = 0; }
+  if (
+    ur.dailyCount + count > SEGMENTS_PER_DAY ||
+    ur.monthlyCount + count > SEGMENTS_PER_MONTH ||
+    ur.yearlyCount + count > SEGMENTS_PER_YEAR
+  ) return false;
+  ur.dailyCount += count;
+  ur.monthlyCount += count;
+  ur.yearlyCount += count;
+  return true;
 }
-updateUTC();
 
-/* ==== SHOW/HIDE LOCK/TERMINATE BUTTONS BASED ON STATE ==== */
-function updateVaultButtons() {
-  if (isVaultUnlocked) {
-    $('lockVaultBtn').classList.remove('hidden');
-    $('terminateBtn').classList.remove('hidden');
-  } else {
-    $('lockVaultBtn').classList.add('hidden');
-    $('terminateBtn').classList.add('hidden');
+/******************** OWNERSHIP HISTORY BUFFER ********************/
+function updateOwnershipHistory(segment, keyHash, timestamp, type) {
+  const entry = { ownerKey: keyHash, ts: timestamp, type, changeCount: segment.ownershipChangeCount };
+  segment.ownershipChangeHistory.push(entry);
+  if (segment.ownershipChangeHistory.length > HISTORY_MAX)
+    segment.ownershipChangeHistory.shift();
+}
+
+/******************** DEVICE REGISTRATION & MULTI-DEVICE ****************************/
+async function registerDeviceKey(vault, publicKeyBuffer, extraSalt = '') {
+  const deviceKeyHash = await hashDeviceKeyWithSalt(publicKeyBuffer, extraSalt);
+  if (!vault.deviceKeyHashes.includes(deviceKeyHash)) {
+    vault.deviceKeyHashes.push(deviceKeyHash);
+    // Securely persist vault after registration!
   }
 }
+function isValidDeviceKey(vault, deviceKeyHash) {
+  return vault.deviceKeyHashes.includes(deviceKeyHash);
+}
 
-/* ==== LOCK VAULT ==== */
-if ($('lockVaultBtn')) $('lockVaultBtn').onclick = () => {
-  isVaultUnlocked = false;
-  $('vaultUI').classList.add('hidden');
-  $('lockVaultBtn').classList.add('hidden');
-  $('terminateBtn').classList.add('hidden');
-  $('lockedScreen').classList.remove('hidden');
-};
-
-/* ==== ONBOARDING POPUP FOR FIRST USE ==== */
-window.addEventListener('load', () => {
-  if (!localStorage.getItem('vaultOnboarded')) {
-    openModal('onboardingModal');
-    localStorage.setItem('vaultOnboarded', '1');
-  }
-  $('enterVaultBtn')?.focus();
-});
-
-/* ==== ACCESSIBILITY ==== */
-document.querySelectorAll('.modal').forEach(modal => {
-  modal.setAttribute('aria-modal', 'true');
-  modal.setAttribute('role', 'dialog');
-  modal.tabIndex = -1;
-});
-document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') {
-    document.querySelectorAll('.modal, .popup').forEach(m => {
-      if (m.style.display === 'flex') m.style.display = 'none';
+/******************** ONBOARDING (GENESIS, KEY, SEGMENTS, PRIVACY) ********************/
+async function onboardUser(pin) {
+  const credential = await performBiometricAuthenticationForCreation();
+  const publicKey = credential.response.getPublicKey ? credential.response.getPublicKey() : credential.rawId;
+  const deviceKeyHash = await hashDeviceKeyWithSalt(publicKey);
+  const onboardingTS = Math.floor(Date.now() / 1000);
+  const userBioConst = GENESIS_BIO_CONST + (onboardingTS - GENESIS_BIO_CONST);
+  const segments = [];
+  for (let i = 1; i <= SEGMENTS_TOTAL; i++) {
+    segments.push({
+      segmentIndex: i, amount: 1,
+      originalOwnerKey: deviceKeyHash, originalOwnerTS: onboardingTS, originalBioConst: userBioConst,
+      previousOwnerKey: null, previousOwnerTS: null, previousBioConst: null,
+      currentOwnerKey: deviceKeyHash, currentOwnerTS: onboardingTS, currentBioConst: userBioConst,
+      unlocked: i <= SEGMENTS_UNLOCKED,
+      ownershipChangeCount: 0, unlockIndexRef: null, unlockIntegrityProof: null,
+      spentProof: null, ownershipProof: null, ownershipChangeHistory: []
     });
   }
-});
-
-/* ==== AUTO-LOCK SESSION HANDLING ==== */
-function resetIdleTimer() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => {
-    if (isVaultUnlocked) {
-      isVaultUnlocked = false;
-      $('vaultUI').classList.add('hidden');
-      $('lockVaultBtn').classList.add('hidden');
-      $('terminateBtn').classList.add('hidden');
-      $('lockedScreen').classList.remove('hidden');
-      showToast("Vault auto-locked");
-    }
-  }, 10 * 60 * 1000); // 10 minutes
+  let vault = {
+    credentialId: bufferToBase64(credential.rawId),
+    deviceKeyHashes: [deviceKeyHash],
+    onboardingTS, userBioConst, segments,
+    unlockRecords: { day: '', dailyCount: 0, month: '', monthlyCount: 0, year: '', yearlyCount: 0 },
+    adminKeyHashes: [],
+    lockoutTimestamp: null,
+    authAttempts: 0,
+  };
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const derivedKey = await deriveKeyFromPIN(pin, salt);
+  const { iv, ciphertext } = await encryptData(derivedKey, vault);
+  await saveVaultDataToDB(iv, ciphertext, bufferToBase64(salt), vault);
+  return vault;
 }
-['mousemove','keydown','touchstart'].forEach(ev => document.addEventListener(ev, resetIdleTimer));
-resetIdleTimer();
 
-/* ==== ERASE VAULT ==== */
-$('terminateBtn').onclick = () => {
-  if (confirm("This will delete your vault from this device. Make sure you have a backup. Continue?")) {
-    localStorage.removeItem('bioVaultCredentialId');
-    localStorage.removeItem('bioVaultEncrypted');
-    isVaultUnlocked = false;
-    encryptedVault = null;
-    vaultData = null;
-    $('vaultUI').classList.add('hidden');
-    $('lockVaultBtn').classList.add('hidden');
-    $('terminateBtn').classList.add('hidden');
-    $('lockedScreen').classList.remove('hidden');
-    showToast("Vault erased");
+/******************** UNLOCK SEGMENT (With Cap Enforcement) ********************/
+async function unlockNextSegmentWithCap(vault, unlockingSegIndex) {
+  const nowTS = Math.floor(Date.now() / 1000);
+  if (!checkAndRecordUnlock(vault, nowTS, 1)) throw new Error("Unlock cap reached.");
+  const userKeyHash = vault.deviceKeyHashes[0];
+  const segs = vault.segments;
+  const nextLocked = segs.find(seg => !seg.unlocked && seg.currentOwnerKey === userKeyHash);
+  if (nextLocked) {
+    nextLocked.unlocked = true;
+    nextLocked.unlockIndexRef = unlockingSegIndex;
+    nextLocked.currentOwnerTS = nowTS;
+    nextLocked.currentBioConst = nextLocked.previousBioConst
+      ? nextLocked.previousBioConst + (nowTS - nextLocked.previousOwnerTS)
+      : nextLocked.originalBioConst;
+    nextLocked.unlockIntegrityProof = await computeUnlockIntegrityProof(nextLocked);
+    updateOwnershipHistory(nextLocked, userKeyHash, nowTS, "unlock");
   }
+}
+
+/******************** TRANSFER SEGMENT (Single) ********************/
+async function transferSegment(vault, receiverKeyHash, deviceKeyHash) {
+  if (!isValidDeviceKey(vault, deviceKeyHash)) throw new Error("Device not authorized.");
+  const nowTS = Math.floor(Date.now() / 1000);
+  const seg = vault.segments.find(s => s.unlocked && s.currentOwnerKey === deviceKeyHash);
+  if (!seg) throw new Error("No unlocked segments available to transfer.");
+  seg.previousOwnerKey = seg.currentOwnerKey;
+  seg.previousOwnerTS = seg.currentOwnerTS;
+  seg.previousBioConst = seg.currentBioConst;
+  seg.currentOwnerKey = receiverKeyHash;
+  seg.currentOwnerTS = nowTS;
+  seg.currentBioConst = seg.previousBioConst + (nowTS - seg.previousOwnerTS);
+  seg.ownershipChangeCount += 1;
+  seg.unlocked = false;
+  seg.spentProof = await computeSpentProof(seg);
+  seg.ownershipProof = await computeOwnershipProof(seg);
+  updateOwnershipHistory(seg, receiverKeyHash, nowTS, "transfer");
+  await unlockNextSegmentWithCap(vault, seg.segmentIndex);
+  return seg;
+}
+
+/******************** MULTI-SEGMENT/BATCH TRANSFER ("BIO-CATCH" BATCHES) ********************/
+async function exportSegmentsBatch(vault, receiverKeyHash, count, deviceKeyHash) {
+  if (!isValidDeviceKey(vault, deviceKeyHash)) throw new Error("Device not authorized.");
+  const nowTS = Math.floor(Date.now() / 1000);
+  const eligible = vault.segments.filter(s => s.unlocked && s.currentOwnerKey === deviceKeyHash);
+  if (eligible.length < count) throw new Error(`Only ${eligible.length} segments available to transfer.`);
+  const batch = [];
+  for (let i = 0; i < count; i++) {
+    const seg = eligible[i];
+    seg.previousOwnerKey = seg.currentOwnerKey;
+    seg.previousOwnerTS = seg.currentOwnerTS;
+    seg.previousBioConst = seg.currentBioConst;
+    seg.currentOwnerKey = receiverKeyHash;
+    seg.currentOwnerTS = nowTS;
+    seg.currentBioConst = seg.previousBioConst + (nowTS - seg.previousOwnerTS);
+    seg.ownershipChangeCount += 1;
+    seg.unlocked = false;
+    seg.spentProof = await computeSpentProof(seg);
+    seg.ownershipProof = await computeOwnershipProof(seg);
+    updateOwnershipHistory(seg, receiverKeyHash, nowTS, "transfer");
+    await unlockNextSegmentWithCap(vault, seg.segmentIndex);
+    batch.push(seg);
+  }
+  return JSON.stringify(batch.map(seg => exportSegment(seg)));
+}
+function exportSegment(seg) {
+  return JSON.stringify(seg);
+}
+
+/******************** IMPORT/CLAIM (BATCH, FAULT TOLERANT) ********************/
+function importSegmentsBatch(jsonArray, myKeyHash) {
+  const batch = JSON.parse(jsonArray);
+  const imported = [];
+  for (const segJson of batch) {
+    const seg = typeof segJson === "string" ? JSON.parse(segJson) : segJson;
+    if (seg.currentOwnerKey !== myKeyHash) throw new Error(`Segment ${seg.segmentIndex}: Not the current owner`);
+    imported.push(seg);
+  }
+  return imported;
+}
+function claimReceivedSegmentsBatch(vault, receivedSegments) {
+  for (const seg of receivedSegments) {
+    claimReceivedSegment(vault, seg);
+  }
+}
+function claimReceivedSegment(vault, receivedSeg) {
+  const idx = vault.segments.findIndex(s => s.segmentIndex === receivedSeg.segmentIndex);
+  if (idx !== -1) vault.segments[idx] = receivedSeg;
+  else vault.segments.push(receivedSeg);
+}
+
+/******************** ENCRYPTED VAULT BACKUP & RECOVERY ********************/
+async function encryptVaultForBackup(vault, userPassword) {
+  const encodedVault = new TextEncoder().encode(JSON.stringify(vault));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(userPassword), { name: "PBKDF2" }, false, ["deriveKey"]
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encodedVault);
+  return { salt: Array.from(salt), iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) };
+}
+async function decryptVaultFromBackup(backup, userPassword) {
+  const salt = new Uint8Array(backup.salt);
+  const iv = new Uint8Array(backup.iv);
+  const data = new Uint8Array(backup.data);
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(userPassword), { name: "PBKDF2" }, false, ["deriveKey"]
+  );
+  const key = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+    keyMaterial, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+  );
+  const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+/******************** AUDIT/COMPLIANCE EXPORT ********************/
+function exportAuditData(vault, options = { fullHistory: false }) {
+  const payload = {
+    deviceKeyHashes: vault.deviceKeyHashes, onboardingTS: vault.onboardingTS, userBioConst: vault.userBioConst,
+    segments: vault.segments.map(seg => ({
+      segmentIndex: seg.segmentIndex, amount: seg.amount, originalOwnerKey: seg.originalOwnerKey,
+      originalOwnerTS: seg.originalOwnerTS, originalBioConst: seg.originalBioConst,
+      previousOwnerKey: seg.previousOwnerKey, previousOwnerTS: seg.previousOwnerTS, previousBioConst: seg.previousBioConst,
+      currentOwnerKey: seg.currentOwnerKey, currentOwnerTS: seg.currentOwnerTS, currentBioConst: seg.currentBioConst,
+      unlocked: seg.unlocked, ownershipChangeCount: seg.ownershipChangeCount, unlockIndexRef: seg.unlockIndexRef,
+      unlockIntegrityProof: seg.unlockIntegrityProof, spentProof: seg.spentProof, ownershipProof: seg.ownershipProof,
+      ownershipChangeHistory: options.fullHistory ? seg.ownershipChangeHistory : seg.ownershipChangeHistory.slice(-HISTORY_MAX)
+    }))
+  };
+  return JSON.stringify(payload);
+}
+
+/******************** PROOF VERIFICATION ********************/
+async function verifyProofChain(segments, deviceKeyHash) {
+  for (const seg of segments) {
+    const expectedOwnershipProof = await computeOwnershipProof(seg);
+    if (seg.ownershipProof !== expectedOwnershipProof)
+      throw new Error(`Segment ${seg.segmentIndex}: Ownership proof mismatch`);
+    if (seg.unlockIndexRef !== null) {
+      const expectedUnlockIntegrityProof = await computeUnlockIntegrityProof(seg);
+      if (seg.unlockIntegrityProof !== expectedUnlockIntegrityProof)
+        throw new Error(`Segment ${seg.segmentIndex}: Unlock integrity proof mismatch`);
+    }
+    if (seg.spentProof) {
+      const expectedSpentProof = await computeSpentProof(seg);
+      if (seg.spentProof !== expectedSpentProof)
+        throw new Error(`Segment ${seg.segmentIndex}: Spent proof mismatch`);
+    }
+    if (seg.currentOwnerKey !== deviceKeyHash)
+      throw new Error(`Segment ${seg.segmentIndex}: Wrong owner`);
+  }
+  return true;
+}
+
+/******************** ADMIN/ENTERPRISE: MULTI-SIG, EMERGENCY PATCH ********************/
+window.BalanceChainEmergencyPatch = function(patchFn) {
+  patchFn();
+  // In production: restrict to admin keys, multi-sig, and log for audit!
 };
 
-/* ==== FOOTER YEAR ==== */
-if ($('currentYear')) $('currentYear').textContent = new Date().getFullYear();
-
-/* ==== END ==== */
+/******************** EXPORT FOR UI/INTEGRATION ********************/
+window.onboardUser = onboardUser;
+window.registerDeviceKey = registerDeviceKey;
+window.isValidDeviceKey = isValidDeviceKey;
+window.transferSegment = transferSegment;
+window.exportSegmentsBatch = exportSegmentsBatch;
+window.importSegmentsBatch = importSegmentsBatch;
+window.claimReceivedSegmentsBatch = claimReceivedSegmentsBatch;
+window.encryptVaultForBackup = encryptVaultForBackup;
+window.decryptVaultFromBackup = decryptVaultFromBackup;
+window.exportAuditData = exportAuditData;
+window.verifyProofChain = verifyProofChain;
+window.saveVaultDataToDB = saveVaultDataToDB;
+window.loadVaultDataFromDB = loadVaultDataFromDB;
+window.deriveKeyFromPIN = deriveKeyFromPIN;
+window.encryptData = encryptData;
+window.decryptData = decryptData;
