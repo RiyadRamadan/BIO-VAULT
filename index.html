@@ -1,564 +1,162 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!--============================================================================
-       Security & Privacy Headers
-  =============================================================================-->
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
-  <meta http-equiv="X-Frame-Options"      content="DENY">
-  <meta http-equiv="Referrer-Policy"      content="strict-origin-when-cross-origin">
-  <meta name="referrer"                   content="no-referrer">
-  <link rel="privacy-policy"              href="privacy.html">
+<meta charset="UTF-8" />
+<title>Bio‑Vault | P2P UTC Ledger</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 
-  <!--============================================================================
-       PWA & Meta
-  =============================================================================-->
-  <meta name="viewport"       content="width=device-width, initial-scale=1.0">
-  <meta name="description"    content="The next-gen digital money vault—pegged, stable, audit-proof. 1 TVM = 1 USD.">
-  <link rel="manifest"        href="./manifest.json">
-  <link rel="icon"            href="icon-192.png">
-  <title>Bio-Vault | BalanceChain TVM</title>
+<!-- Manifest / Service‑Worker keeps same -->
+<link rel="manifest" href="./manifest.json">
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () =>
+    navigator.serviceWorker
+      .register('./sw.js')
+      .then(r=>console.log('SW',r.scope))
+      .catch(console.error));
+}
+</script>
 
-  <!--============================================================================
-       Ethers.js & Service Worker
-  =============================================================================-->
-  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js')
-          .then(reg => console.log('SW registered:', reg.scope))
-          .catch(err => console.error('SW failed:', err));
-      });
-    }
-  </script>
+<!-- ethers.js UMD -->
+<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
 
-  <!--============================================================================
-       Core Styles
-  =============================================================================-->
-  <style>
-    /* --- Reset & Base --- */
-    html, body {
-      margin:0; padding:0;
-      min-height:100vh;
-      background: linear-gradient(to left, #2f4979, #15264d);
-      color:#fff;
-      font-family: 'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;
-      text-align:center;
-      scroll-behavior: smooth;
-    }
-    h1,h2,h3 { margin:10px 0; }
-    .hidden { display:none !important; }
+<!-- VERY light css; .show toggled by JS -->
+<style>
+body{background:linear-gradient(to left,#2f4979,#15264d);color:#fff;font-family:sans-serif;margin:0;padding:20px;min-height:100vh;text-align:center}
+.hidden{display:none}
 
-    /* --- Buttons --- */
-    button {
-      background:#2258c4; color:#fff;
-      padding:10px 22px; border:none; border-radius:5px;
-      font-size:16px; margin:6px; cursor:pointer;
-      transition: background .3s, box-shadow .2s;
-      outline:none;
-    }
-    button:hover { background:#144180; }
-    button:focus { box-shadow:0 0 0 3px rgba(255,225,100,.8); }
+/* simple modal */
+.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);display:none;justify-content:center;align-items:center;z-index:9999}
+.modal.show{display:flex}
+.modal .popup-content{background:#fff;color:#000;padding:20px;border-radius:8px;max-width:420px;width:90%}
 
-    /* --- Layout & Sections --- */
-    .section {
-      margin:22px auto;
-      max-width:860px;
-      width:93%;
-      text-align:left;
-    }
-    .input-field {
-      padding:11px; margin:11px 7px 11px 0;
-      border:none; border-radius:4px;
-      width:46%; max-width:320px; font-size:17px;
-    }
-    .pass-wrap { position:relative; display:inline-block; }
-    .pass-wrap input { width:calc(100% - 60px); }
-    .show-hide-btn {
-      position:absolute; right:4px; top:50%; transform:translateY(-50%);
-      background:none; border:none; color:#2258c4;
-      font-size:14px; cursor:pointer; outline:none;
-    }
+/* toast */
+#toast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e40af;color:#fff;padding:10px 20px;border-radius:6px}
+.toast-error{background:#b91c1c}
 
-    /* --- Tables --- */
-    #transactionTable {
-      width:100%; border-collapse:collapse;
-      background:#fff; color:#000;
-      margin-top:23px; border-radius:6px; overflow:hidden;
-    }
-    #transactionTable th, #transactionTable td {
-      padding:12px; border-bottom:1px solid #ccc;
-      font-size:16px; word-wrap:break-word;
-    }
-    #transactionTable th {
-      background:#eaf0fa; text-align:left;
-    }
-
-    /* --- Modals & Popups --- */
-    .modal, .popup {
-      display:none;
-      position:fixed; top:0; left:0;
-      width:100vw; height:100vh;
-      background:rgba(0,0,0,.84);
-      justify-content:center; align-items:center;
-      z-index:10010;
-      animation:fadeIn .22s ease-out;
-    }
-    @keyframes fadeIn { from{opacity:0;transform:scale(.96);} to{opacity:1;transform:scale(1);} }
-    .modal-content, .popup-content {
-      background:#fff; color:#0e2242;
-      padding:36px 22px; border-radius:12px;
-      max-width:440px; min-width:260px;
-      box-shadow:0 8px 48px rgba(0,0,0,.29);
-      text-align:left; position:relative;
-      font-size:17px; line-height:1.6;
-      animation:scaleIn .18s ease-out;
-    }
-    @keyframes scaleIn { from{opacity:0;transform:scale(.91);} to{opacity:1;transform:scale(1);} }
-    .modal-close {
-      position:absolute; top:11px; right:16px;
-      background:none; border:none; color:#174ca7;
-      font-size:25px; cursor:pointer; outline:none;
-    }
-    .modal-nav {
-      display:flex; gap:6px; margin-bottom:18px;
-      justify-content:center; flex-wrap:wrap;
-    }
-    .modal-nav button {
-      background:#e9edfc; color:#1a3167;
-      padding:5px 13px; border:none; border-radius:5px;
-      font-size:15px; font-weight:bold;
-      transition:background .2s,color .2s;
-    }
-    .modal-nav button.active,
-    .modal-nav button:hover {
-      background:#ffe164; color:#193356;
-    }
-    .modal-list { padding-left:18px; margin:9px 0; }
-    .modal-tip {
-      display:inline-block; margin-top:9px;
-      background:#f3f4f6; color:#08b0a4;
-      padding:7px 12px; border-radius:5px;
-      font-size:.96rem;
-    }
-
-    /* --- Explainer --- */
-    .explainer-section {
-      background:rgba(255,255,255,.12);
-      border-radius:10px;
-      margin:20px auto 0;
-      padding:22px 32px;
-      max-width:720px; width:96%;
-      text-align:left;
-      box-shadow:0 4px 24px rgba(0,0,0,.07);
-    }
-    .explainer-section h2 { color:#ffe164; font-size:2rem; }
-    .explainer-features {
-      display:flex; flex-wrap:wrap; gap:10px; margin:16px 0;
-    }
-    .explainer-feature {
-      background:#1a2d50; color:#ffe164;
-      padding:7px 14px; border-radius:7px;
-      min-width:110px; text-align:center;
-    }
-    .explainer-links { margin-top:18px; }
-    .explainer-links button { background:none; color:#fff; border:none; text-decoration:underline; font-size:1.1em; }
-    .explainer-links .audit-btn {
-      font-weight:bold; background:none; border:2px solid #ffe164;
-      border-radius:6px; padding:5px 13px; margin-left:8px;
-      color:#ffe164; text-decoration:none;
-    }
-    .onboarding-tip {
-      display:inline-block; margin-top:12px;
-      background:#0d2b43; color:#7fffd4;
-      padding:7px 12px; border-radius:5px;
-      font-size:1rem;
-    }
-
-    /* --- Help FAB & Toast --- */
-    .help-fab {
-      position:fixed; bottom:22px; right:22px;
-      background:#ffe164; color:#15264d;
-      width:62px; height:62px; border-radius:50%;
-      border:none; font-size:32px; font-weight:bold;
-      box-shadow:0 6px 20px rgba(0,0,0,.25);
-      cursor:pointer; transition:background .2s; outline:none;
-      z-index:10050;
-    }
-    .help-fab:hover { background:#fff0b2; }
-    .toast {
-      position:fixed; bottom:38px; left:50%;
-      transform:translateX(-50%);
-      background:#10b981; color:#fff;
-      padding:15px 30px; border-radius:7px;
-      font-weight:bold; font-size:17px;
-      box-shadow:0 4px 24px rgba(20,65,128,.27);
-      display:none; z-index:10070;
-      animation:fadeIn .27s ease-out;
-    }
-    .toast.toast-error { background:#ef4444; }
-
-    /* --- Responsive Tweaks --- */
-    @media (max-width:900px) {
-      .section, .explainer-section { width:95vw; }
-      .modal-content, .popup-content { max-width:90vw; }
-    }
-    @media (max-width:650px) {
-      .input-field { width:98%; }
-      button { font-size:14px; padding:8px 12px; }
-    }
-  </style>
+/* transaction pager */
+#txPrevBtn,#txNextBtn{margin:10px}
+</style>
 </head>
+
 <body>
-  <noscript>
-    <div style="padding:2em; background:#ef4444; color:#fff; text-align:center;">
-      JavaScript is required. Please enable JS or use a compatible browser.
-    </div>
-  </noscript>
+<!-- toast -->
+<div id="toast"></div>
 
-  <!-- Explainer -->
-  <div class="explainer-section" role="complementary">
-    <h2>BalanceChain: Digital Money. Redefined.</h2>
-    <p><strong>1 TVM = 1 USD. Always. Backed by real human effort.</strong></p>
-    <div class="explainer-features">
-      <div class="explainer-feature">Pegged & Stable</div>
-      <div class="explainer-feature">Audit-Proof</div>
-      <div class="explainer-feature">Human-Effort Backed</div>
-      <div class="explainer-feature">Instant, P2P & Private</div>
-      <div class="explainer-feature">Works Offline</div>
-      <div class="explainer-feature">No Middlemen, No Mining, No Speculation</div>
-    </div>
-    <div class="explainer-links">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-      <button class="audit-btn" onclick="openModal('auditModal')">Audit Peg</button>
-    </div>
-    <div class="onboarding-tip" id="onboardingTip" style="display:none;">
-      <strong>Tip:</strong> Back up your vault now. Lose backup or passphrase → funds are gone forever.
-    </div>
-  </div>
+<!-- backup‑reminder banner -->
+<div id="onboardingTip" style="display:none;margin:10px;padding:10px;background:#fde047;color:#000;border-radius:6px">
+  <strong>Reminder:</strong> Export an encrypted backup or .vault file!
+</div>
 
-  <!-- Help FAB -->
-  <button class="help-fab" aria-label="Help" onclick="openModal('faqModal')">?</button>
+<!-- Locked Screen -->
+<div id="lockedScreen">
+  <h1>Bio‑Vault</h1>
+  <h2>WELCOME TO YOUR VAULT<br>WHERE THE TRUE VALUE OF MONEY IS.</h2>
+  <button id="enterVaultBtn">Enter Vault</button>
+</div>
 
-  <!-- Onboarding Modal -->
-  <div id="onboardingModal" class="modal" role="dialog" aria-modal="true">
-    <div class="modal-content" tabindex="0">
-      <button class="modal-close" onclick="closeModal('onboardingModal')">&times;</button>
-      <div class="modal-nav">
-        <button onclick="modalNav('onboardingModal',0)" class="active">Welcome</button>
-        <button onclick="modalNav('onboardingModal',1)">How It Works</button>
-        <button onclick="modalNav('onboardingModal',2)">Security</button>
-      </div>
-      <div class="modal-onboarding-page">
-        <h2>Welcome to Bio-Vault</h2>
-        <p>Your vault is the world’s first truly fair, pegged, audit-proof digital money system.</p>
-        <button onclick="modalNav('onboardingModal',1)">Next →</button>
-      </div>
-      <div class="modal-onboarding-page hidden">
-        <h2>How It Works</h2>
-        <ul class="modal-list">
-          <li>Your keys & proofs remain local.</li>
-          <li>Earn & transfer TVM instantly—no banks.</li>
-          <li>Peg never breaks: 1 TVM = 1 USD.</li>
-          <li>Bridge on-chain or offline at will.</li>
-        </ul>
-        <button onclick="modalNav('onboardingModal',2)">Next →</button>
-      </div>
-      <div class="modal-onboarding-page hidden">
-        <h2>Security First</h2>
-        <ul class="modal-list">
-          <li><strong>Backup now.</strong> Lose it → lose everything.</li>
-          <li>No recovery—vault is fully self-custodial.</li>
-          <li>Store passphrase & backup offline.</li>
-        </ul>
-        <button onclick="closeModal('onboardingModal')">Got it</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- White Paper Modal -->
-  <div id="whitepaperModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('whitepaperModal')">&times;</button>
-    <div class="modal-nav">
-      <button class="active" onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('auditModal')">Audit Peg</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>BalanceChain White Paper (Summary)</h2>
-    <div class="modal-features">
-      <div class="modal-feature">Pegged 1 TVM = 1 USD</div>
-      <div class="modal-feature">Audit-Proof & Human-Effort</div>
-      <div class="modal-feature">Protocol-Enforced Stability</div>
-    </div>
-    <ul class="modal-list">
-      <li>Every unit of TVM is backed by cryptographic human-effort proofs.</li>
-      <li>No hidden inflation or mining—pure protocol-enforced value.</li>
-      <li>Self-custodial & offline-capable, with instant auditability.</li>
-      <li>Bridge on-chain for 100% verifiable backing.</li>
-    </ul>
-    <div class="modal-tip">For the full technical white paper, contact support or join the community.</div>
-  </div></div>
-
-  <!-- Audit Modal -->
-  <div id="auditModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('auditModal')">&times;</button>
-    <div class="modal-nav">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button class="active" onclick="openModal('auditModal')">Audit Peg</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>Audit the Peg</h2>
-    <p><strong>Why TVM is always $1:</strong> Supply and redemption are enforced by smart contract.</p>
-    <p><strong>Current Peg Status:</strong><br>
-      <span id="auditPegLive">Loading…</span>
-    </p>
-    <div class="modal-tip">No one—even the creators—can break the peg or freeze your funds.</div>
-  </div></div>
-
-  <!-- FAQ Modal -->
-  <div id="faqModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('faqModal')">&times;</button>
-    <div class="modal-nav">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button class="active" onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('auditModal')">Audit Peg</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>FAQ</h2>
-    <ul class="modal-list">
-      <li><strong>How is TVM always $1?</strong> Peg enforced on-chain by code.</li>
-      <li><strong>What is Bio-IBAN?</strong> Your private cryptographic account ID.</li>
-      <li><strong>What is Bio-Catch?</strong> A portable batch bundle for P2P transfers.</li>
-      <li><strong>What if I lose my vault?</strong> Funds are gone—always back up.</li>
-      <li><strong>Can I bridge on-chain?</strong> Yes—connect your wallet.</li>
-      <li><strong>Is it private?</strong> Keys & proofs never leave your device unless you export.</li>
-      <li><strong>Audit-proof?</strong> Full segment history is provable & exportable.</li>
-    </ul>
-  </div></div>
-
-  <!-- Support Modal -->
-  <div id="supportModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('supportModal')">&times;</button>
-    <div class="modal-nav">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('auditModal')">Audit Peg</button>
-      <button class="active" onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>Support</h2>
-    <p>Email: <a href="mailto:support@shemoney.app">support@shemoney.app</a></p>
-    <p>Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a></p>
-  </div></div>
-
-  <!-- Community Modal -->
-  <div id="communityModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('communityModal')">&times;</button>
-    <div class="modal-nav">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('auditModal')">Audit Peg</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button class="active" onclick="openModal('communityModal')">Community</button>
-      <button onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>Community</h2>
-    <p>Telegram: <a href="https://t.me/yourcommunity" target="_blank">@yourcommunity</a></p>
-    <p>Discord:  <a href="https://discord.gg/yourserver" target="_blank">discord.gg/yourserver</a></p>
-  </div></div>
-
-  <!-- Legal Modal -->
-  <div id="legalModal" class="modal"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('legalModal')">&times;</button>
-    <div class="modal-nav">
-      <button onclick="openModal('whitepaperModal')">White Paper</button>
-      <button onclick="openModal('faqModal')">FAQ</button>
-      <button onclick="openModal('auditModal')">Audit Peg</button>
-      <button onclick="openModal('supportModal')">Support</button>
-      <button onclick="openModal('communityModal')">Community</button>
-      <button class="active" onclick="openModal('legalModal')">Legal</button>
-    </div>
-    <h2>Legal & Privacy</h2>
-    <p><strong>Terms:</strong> Experimental and open-source. You are responsible for your funds.</p>
-    <p><strong>Privacy:</strong> No data leaves your device unless you export it.</p>
-  </div></div>
-
-  <!-- Change Passphrase Modal -->
-  <div id="changePassModal" class="modal" role="dialog" aria-modal="true"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('changePassModal')">&times;</button>
-    <h3>Change Passphrase</h3>
-    <label>Old Passphrase:</label>
-    <div class="pass-wrap">
-      <input type="password" id="oldPassInput" class="input-field" placeholder="Current passphrase">
-      <button class="show-hide-btn" onclick="togglePassword('oldPassInput',this)">Show</button>
-    </div>
-    <label>New Passphrase:</label>
-    <div class="pass-wrap">
-      <input type="password" id="newPassInput" class="input-field" placeholder="New passphrase">
-      <button class="show-hide-btn" onclick="togglePassword('newPassInput',this)">Show</button>
-    </div>
-    <label>Confirm New:</label>
-    <div class="pass-wrap">
-      <input type="password" id="confirmNewPassInput" class="input-field" placeholder="Confirm new">
-      <button class="show-hide-btn" onclick="togglePassword('confirmNewPassInput',this)">Show</button>
-    </div>
-    <button onclick="closeModal('changePassModal')">Cancel</button>
-    <button id="changePassSaveBtn">Save New Passphrase</button>
-  </div></div>
-
-  <!-- Confirmation Modal -->
-  <div id="confirmModal" class="modal" role="dialog" aria-modal="true"><div class="modal-content" tabindex="0">
-    <button class="modal-close" onclick="closeModal('confirmModal')">&times;</button>
-    <h3 id="confirmModalTitle">Confirm</h3>
-    <p id="confirmModalMessage">Are you sure?</p>
-    <button onclick="closeModal('confirmModal')">Cancel</button>
-    <button id="confirmModalConfirmBtn" style="background:#10b981;">Yes, proceed</button>
-  </div></div>
-
-  <!-- Locked Screen -->
-  <div id="lockedScreen" class="section" aria-label="Locked screen">
-    <h1>Bio-Vault</h1>
-    <h2>Your TVM, truly yours.</h2>
-    <button id="enterVaultBtn">Enter Vault</button>
-  </div>
-
-  <!-- Passphrase Modal -->
-  <div id="passModal" class="modal" role="dialog" aria-modal="true"><div class="popup-content" tabindex="0">
+<!-- Passphrase Modal (class=modal) -->
+<div id="passModal" class="modal">
+  <div class="popup-content">
     <h3 id="passModalTitle">Enter Passphrase</h3>
-    <input type="password" id="passModalInput" class="input-field" placeholder="Passphrase">
-    <input type="password" id="passModalConfirmInput" class="input-field hidden" placeholder="Confirm passphrase">
+    <input type="password" id="passModalInput" placeholder="Enter passphrase"><br>
     <button id="passModalCancelBtn">Cancel</button>
-    <button id="passModalSaveBtn">Save</button>
-  </div></div>
+    <button id="passModalSaveBtn">Unlock</button>
+  </div>
+</div>
 
-  <!-- Security Buttons (shown post-unlock) -->
-  <div id="securityBtns" class="section hidden">
-    <button id="lockVaultBtn">Lock Vault</button>
-    <button id="terminateBtn" style="background:#ef4444;">Terminate Vault</button>
-    <button onclick="openModal('changePassModal')">Change Passphrase</button>
+<!-- Onboarding Modal -->
+<div id="onboardingModal" class="modal">
+  <div class="popup-content">
+    <h3>Welcome to Bio‑Vault!</h3>
+    <p>Click “Got it” to create your vault.</p>
+    <button class="modal-close">Got it</button>
+  </div>
+</div>
+
+<!-- Lock / Terminate -->
+<button id="lockVaultBtn" class="hidden">Lock Vault</button>
+<button id="terminateBtn" class="hidden">Terminate</button>
+
+<!-- Main Vault UI -->
+<div id="vaultUI" class="hidden">
+  <!-- Bio‑IBAN -->
+  <div>
+    <label>Your Bio‑IBAN</label><br>
+    <input id="bioibanInput" readonly style="width:70%;max-width:340px">
+    <button id="copyBioIBANBtn">Copy</button>
   </div>
 
-  <!-- Main Vault UI -->
-  <div id="vaultUI" class="hidden" role="main">
-    <div class="section">
-      <label>Your Bio-IBAN:</label><br>
-      <input type="text" id="bioibanInput" class="input-field" readonly placeholder="BIO…">
-      <button id="copyBioIBANBtn">Copy IBAN</button>
-      <button id="showBioCatchBtn">Show Bio-Catch</button>
-    </div>
+  <!-- Balances -->
+  <div id="tvmBalance">Balance 0 TVM</div>
+  <div id="usdBalance">Equivalent 0 USD</div>
 
-    <div class="section" id="balanceContainer">
-      <span id="tvmBalance">Balance: 0 TVM</span><br>
-      <span id="usdBalance">Equivalent: 0.00 USD</span><br>
-      <span id="auditPegLive"></span>
-    </div>
-
-    <div class="section" id="bioLineUTCContainer">
-      <div id="bioLineText">🔄 BonusConstant: 0</div>
-      <div id="utcTime">UTC Time: …</div>
-    </div>
-
-    <!-- Wallet & Claim -->
-    <div class="section">
-      <label>On-Chain Wallet:</label><br>
-      <input type="text" id="userWalletAddress" class="input-field" placeholder="0xYourWallet…">
-      <button id="saveWalletBtn">Save Wallet</button>
-      <button id="autoConnectWalletBtn">Connect MetaMask</button><br>
-      <span id="walletStatus" style="margin-left:12px;font-size:14px;"></span>
-    </div>
-    <div class="section" id="tvmClaimSection">
-      <span id="tvmClaimable">TVM Claimable: 0</span>
-      <button id="claimTvmBtn">Claim TVM</button>
-      <span id="tvmClaimResult" style="margin-left:12px;font-size:14px;"></span>
-    </div>
-
-    <!-- Catch In / Out -->
-    <div class="section">
-      <input type="text"    id="catchInBioCatch" class="input-field" placeholder="Paste Bio-Catch">
-      <input type="number"  id="catchInAmount"   class="input-field" placeholder="Amount (TVM)">
-      <button id="catchInBtn">Catch In</button>
-    </div>
-    <div class="section">
-      <input type="text"    id="receiverBioIBAN" class="input-field" placeholder="Receiver Bio-IBAN">
-      <input type="number"  id="catchOutAmount"  class="input-field" placeholder="Amount (TVM)">
-      <button id="catchOutBtn">Catch Out</button>
-    </div>
-
-    <!-- Export / Import -->
-    <div class="section">
-      <button id="exportBtn">Export Transactions</button>
-      <button id="exportBackupBtn">Backup Vault</button>
-      <button id="exportFriendlyBtn">Friendly Backup</button><br>
-      <label>Import .vault:</label>
-      <input type="file" id="importVaultFileInput" accept=".vault">
-    </div>
-
-    <!-- Transactions & Pagination -->
-    <div class="section">
-      <div id="txEmptyState" style="color:#ffe164; display:none; margin-bottom:12px;">
-        No transactions yet.
-      </div>
-      <button id="txPrevBtn" style="display:none;">← Prev</button>
-      <button id="txNextBtn" style="display:none;">Next →</button>
-      <table id="transactionTable">
-        <thead>
-          <tr>
-            <th>Bio-IBAN</th>
-            <th>Bio-Catch</th>
-            <th>Amount</th>
-            <th>Date/Time</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="transactionBody"></tbody>
-      </table>
-    </div>
-
-    <div class="section" id="p2pInfo" style="text-align:center;">
-      <em>(1 USD = 12 TVM — protocol-pegged. 
-      <button onclick="openModal('whitepaperModal')" style="background:none;border:none;color:#ffe164;text-decoration:underline;cursor:pointer;">
-        How?</button>)</em>
-    </div>
+  <!-- Bio‑Line & UTC -->
+  <div id="bioLineUTCContainer">
+    <span id="bioLineText">🔄 BonusConstant 0</span>
+    <span id="utcTime">UTC …</span>
   </div>
 
-  <!-- Bio-Catch Popup -->
-  <div id="bioCatchPopup" class="popup" role="dialog" aria-modal="true"><div class="popup-content" tabindex="0">
-    <h3>Your Bio-Catch Number</h3>
+  <!-- Wallet -->
+  <div>
+    <input id="userWalletAddress" placeholder="0xWallet…" style="width:60%;max-width:300px">
+    <button id="saveWalletBtn">Save</button>
+    <button id="autoConnectWalletBtn">MetaMask</button>
+  </div>
+
+  <!-- Catch‑In -->
+  <div id="catchInSection">
+    <input id="catchInBioCatch" placeholder="Bio‑Catch #">
+    <input id="catchInAmount" type="number" placeholder="Amount">
+    <button id="catchInBtn">Catch In</button>
+  </div>
+
+  <!-- Catch‑Out -->
+  <div id="catchOutSection">
+    <input id="receiverBioIBAN" placeholder="Receiver Bio‑IBAN">
+    <input id="catchOutAmount" type="number" placeholder="Amount">
+    <button id="showBioCatchBtn">Generate Bio‑Catch</button>
+    <button id="catchOutBtn">Catch Out</button>
+  </div>
+
+  <!-- Claimable TVM -->
+  <h4 id="tvmClaimable">TVM Claimable: 0</h4>
+  <button id="claimTvmBtn">Claim TVM</button>
+
+  <!-- Transactions -->
+  <h3>Transaction History</h3>
+  <button id="exportBtn">Export CSV</button>
+  <button id="exportBackupBtn">Encrypted Backup</button>
+  <button id="exportFriendlyBtn">.vault Backup</button>
+  <input type="file" id="importVaultFileInput" accept=".vault">
+  <table id="transactionTable">
+    <thead>
+      <tr><th>Bio‑IBAN</th><th>Bio‑Catch</th><th>Amount</th><th>Date</th><th>Status</th></tr>
+    </thead>
+    <tbody id="transactionBody"></tbody>
+  </table>
+  <button id="txPrevBtn">← Prev</button>
+  <button id="txNextBtn">Next →</button>
+  <div id="txEmptyState" style="display:none">No transactions yet</div>
+</div>
+
+<!-- Bio‑Catch Popup -->
+<div id="bioCatchPopup" class="modal">
+  <div class="popup-content">
+    <h3>Your new Bio‑Catch</h3>
     <p id="bioCatchNumberText"></p>
     <button id="copyBioCatchBtn">Copy</button>
     <button id="closeBioCatchPopup">Close</button>
-  </div></div>
-
-  <!-- Toast -->
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <!-- Footer -->
-  <div class="section" style="text-align:center; margin:40px 0 20px;">
-    <a href="privacy.html" style="color:#ffe164; margin-right:12px;">Privacy Policy</a>
-    <a href="terms.html"    style="color:#ffe164;">Terms of Service</a><br>
-    <small>By RR.R — for Humanity. © <span id="currentYear"></span></small>
-    <script>document.getElementById('currentYear').textContent = new Date().getFullYear();</script>
   </div>
+</div>
 
-  <!--============================================================================
-       Main Application Script (all UI logic now lives here)
-  =============================================================================-->
-  <script type="module" src="main.js"></script>
+<!-- Footer / Rotate‑PIN -->
+<div style="margin-top:30px">
+  <button id="rotatePinBtn">Rotate Passphrase</button>
+  <p>By RR.R — for Humanity</p>
+</div>
+
+<!-- Vault logic -->
+<script type="module" src="main.js"></script>
 </body>
 </html>
