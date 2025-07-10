@@ -63,6 +63,23 @@ const sha256 = async data =>
 
 const randomBytes = len => crypto.getRandomValues(new Uint8Array(len));
 
+/* simple clipboard */
+function copyToClipboard(text) {
+  if (navigator.clipboard) {
+    return navigator.clipboard.writeText(text)
+      .then(() => toast("Copied!"))
+      .catch(() => toast("Copy failed", true));
+  }
+  /* fallback */
+  const ta = Object.assign(document.createElement("textarea"), { value: text });
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); toast("Copied!"); }
+  catch { toast("Copy failed", true); }
+  ta.remove();
+}
+
+
 /* ──────────────── INDEXED-DB PERSISTENCE ─────────────────── */
 class VaultStorage {
   static _open() {
@@ -657,7 +674,10 @@ const renderVaultUI = () => {
   document.getElementById("bioibanInput").value =
     v.deviceKeyHashes[0]?.slice(0, 36) || "";
 
-  const segUsed = v.segments.filter(s => s.ownershipChangeCount > 0).length;
+  /* include initial unlocked segments for first‑time balance display */
+  const segUsed = v.segments.filter(
+    s => s.ownershipChangeCount > 0 || s.unlocked
+  ).length;
   const balance = Math.floor(segUsed / Protocol.TVM.SEGMENTS_PER_TOKEN) -
                   (v.tvmClaimedThisYear || 0);
   document.getElementById("tvmBalance").textContent = `Balance: ${balance} TVM`;
@@ -700,6 +720,91 @@ window.safeHandler = fn =>
             localStorage.setItem("vaultBackedUp","yes"); showBackupReminder();
             toast("Friendly backup exported"); });
 })();
+/* ───────────── PRIMARY BUTTON WIRING ───────────── */
+(() => {
+  /* Copy Bio‑IBAN */
+  document.getElementById("copyBioIBANBtn")
+    ?.addEventListener("click", () => {
+      const v = document.getElementById("bioibanInput").value.trim();
+      if (v) copyToClipboard(v);
+    });
+
+  /* Generate & show new Bio‑Catch */
+  document.getElementById("showBioCatchBtn")
+    ?.addEventListener("click", () => {
+      const code = `BC-${Date.now()}-${Math.floor(Math.random() * 1e5)}`;
+      document.getElementById("bioCatchNumberText").textContent = code;
+      openModal("bioCatchPopup");
+    });
+
+  /* Copy Bio‑Catch from popup */
+  document.getElementById("copyBioCatchBtn")
+    ?.addEventListener("click", () => {
+      const txt = document.getElementById("bioCatchNumberText").textContent;
+      copyToClipboard(txt);
+    });
+
+  /* Close popup */
+  document.getElementById("closeBioCatchPopup")
+    ?.addEventListener("click", () => closeModal("bioCatchPopup"));
+
+  /* Catch‑Out */
+  document.getElementById("catchOutBtn")
+    ?.addEventListener("click", () => safeHandler(async () => {
+      const recv = document.getElementById("receiverBioIBAN").value.trim();
+      const amt  = Number(document.getElementById("catchOutAmount").value);
+      if (!recv || !amt) throw new Error("Receiver & amount required");
+      await SegmentService.transferSegment(recv, VaultService.current.deviceKeyHashes[0]);
+      toast(`Sent ${amt} TVM`);
+      renderVaultUI();
+    }));
+
+  /* Catch‑In */
+  document.getElementById("catchInBtn")
+    ?.addEventListener("click", () => safeHandler(async () => {
+      const bc  = document.getElementById("catchInBioCatch").value.trim();
+      const amt = Number(document.getElementById("catchInAmount").value);
+      if (!bc || !amt) throw new Error("Bio‑Catch & amount required");
+
+      const myKey = VaultService.current.deviceKeyHashes[0];
+      const segs  = SegmentService.importSegmentsBatch(bc, myKey);
+      await SegmentService.claimReceivedSegmentsBatch(segs);
+      toast(`Received ${amt} TVM`);
+      renderVaultUI();
+    }));
+
+  /* Export CSV */
+  document.getElementById("exportBtn")
+    ?.addEventListener("click", () => {
+      const rows = [["Bio‑IBAN","Bio‑Catch","Amount","Date","Status"],
+        ...document.querySelectorAll("#transactionBody tr")
+          .entries()].map(([,tr]) =>
+        [...tr.children].map(td => td.textContent.trim()));
+      const csv = "data:text/csv;charset=utf-8," +
+        rows.map(r => r.join(",")).join("\n");
+      const a = Object.assign(document.createElement("a"), {
+        href: encodeURI(csv),
+        download: "transactions.csv"
+      });
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+
+  /* Import .vault */
+  document.getElementById("importVaultFileInput")
+    ?.addEventListener("change", e => safeHandler(async () => {
+      const f = e.target.files[0]; if (!f) return;
+      const txt = await f.text();
+      const vault = JSON.parse(txt);
+      VaultService._session = {
+        vaultData: vault,
+        key: null,
+        salt: null
+      };
+      toast("Vault imported (read‑only, please unlock with passphrase)");
+      renderVaultUI();
+    }));
+})();
+
 
 /* ───────────── SESSION  AUTO-LOCK ─────────────── */
 (() => {
