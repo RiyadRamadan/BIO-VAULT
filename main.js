@@ -31,18 +31,25 @@ const DB = Object.freeze({
 });
 
 /* ────────────────────── SMALL HELPERS ────────────────────── */
-/* --- replace the old arrow function with this block --- */
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+/* chunk‑safe */
 function bufferToBase64(buffer) {
-  const bytes  = new Uint8Array(buffer);
-  const CHUNK  = 0x8000;          // 32 768 bytes = safe slice size
-  let binary   = "";
+  const bytes = new Uint8Array(buffer);
+  const CHUNK = 0x8000;
+  let bin = "";
   for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode.apply(
-      null,
-      bytes.subarray(i, i + CHUNK)
-    );
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
   }
-  return btoa(binary);
+  return btoa(bin);
+}
+
+function base64ToBuffer(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 
