@@ -31,18 +31,20 @@ const DB = Object.freeze({
 });
 
 /* ────────────────────── SMALL HELPERS ────────────────────── */
-const enc = new TextEncoder();
-const dec = new TextDecoder();
+/* --- replace the old arrow function with this block --- */
+function bufferToBase64(buffer) {
+  const bytes  = new Uint8Array(buffer);
+  const CHUNK  = 0x8000;          // 32 768 bytes = safe slice size
+  let binary   = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, i + CHUNK)
+    );
+  }
+  return btoa(binary);
+}
 
-const bufferToBase64 = buf =>
-  btoa(String.fromCharCode(...new Uint8Array(buf)));
-
-const base64ToBuffer = b64 => {
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
-};
 
 const sha256 = async data =>
   bufferToBase64(
