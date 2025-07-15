@@ -729,6 +729,18 @@ document.getElementById("rotatePinBtn")?.addEventListener("click",()=>safeHandle
 }));
 
 /*──────────────────────── 24. INITIAL BOOTSTRAP ────────────────────*/
+/*–—  ENTER-VAULT button (opens onboarding/pass modal on demand) —–*/
+document.getElementById("enterVaultBtn")
+  ?.addEventListener("click", () => {
+    if (!localStorage.getItem("vaultOnboarded")) {
+      openModal("onboardingModal");
+      modalNav("onboardingModal", 0);
+    } else {
+      openModal("passModal");
+      document.getElementById("passModalInput")?.focus();
+    }
+});
+
 window.addEventListener("DOMContentLoaded",()=>safeHandler(async()=>{
   if(!indexedDB||!crypto?.subtle){document.body.innerHTML="<h2>Your browser lacks required APIs.</h2>";return;}
   await TimeSyncService.sync();
