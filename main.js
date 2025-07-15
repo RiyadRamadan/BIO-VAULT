@@ -159,7 +159,6 @@ class CryptoService{
   }
   
 }
-
 /*────────────────────────── 5.  HASH & PROOF HELPERS ───────────────────────*/
 const hashDeviceKeyWithSalt = async (buf, extra="") =>
   sha256(new Uint8Array([
