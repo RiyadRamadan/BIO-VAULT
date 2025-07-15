@@ -496,7 +496,6 @@ class AuditService{
 
 /*──────────────────────── 15. CHAIN SERVICE (stub) ──────────────────*/
 const CONTRACT="0xYourDeployedAddressHere";
-import claimAbi from "./claimAbi.json" assert {type:"json"};
 const ChainService=(()=>{
   let provider=null,signer=null;
   return{
