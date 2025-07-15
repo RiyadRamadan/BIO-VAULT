@@ -1,164 +1,142 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
-<meta charset="UTF-8" />
-<title>Bio‑Vault | P2P UTC Ledger</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf‑8">
+  <title>Balance‑Chain Vault</title>
 
-<!-- Manifest / Service‑Worker keeps same -->
-<link rel="manifest" href="./manifest.json">
+  <!-- ▸ Security & PWA meta -->
+  <meta http‑equiv="Content‑Security‑Policy"
+        content="default-src 'self';
+                 connect-src 'self' https://*.ethers.org;
+                 script-src 'self';
+                 style-src  'self' 'unsafe-inline';
+                 img-src    'self' data:;">
+  <meta name="viewport"        content="width=device-width,initial-scale=1">
+  <meta name="theme-color"     content="#15264d">
+  <link rel="manifest"         href="manifest.json">
+  <link rel="apple-touch-icon" href="/icons/192.png">
+
+  <!-- ▸ Extracted stylesheet -->
+  <link rel="preload"    href="vault.css" as="style">
+  <link rel="stylesheet" href="vault.css"
+        integrity="sha384-REPLACE_WITH_SRI_HASH"
+        crossorigin="anonymous">
+</head>
+<body>
+
+<!-- ───────────────────────── Locked / Welcome screen ───────────────────── -->
+<section id="lockedScreen">
+  <h1 data-i18n="welcome.title">Balance‑Chain Vault</h1>
+  <button id="openVaultBtn" class="primary" data-i18n="welcome.open">Open</button>
+</section>
+
+<!-- ───────────────────────── Vault dashboard ────────────────────────────── -->
+<section id="vaultUI" style="display:none">
+
+  <header class="vault‑header">
+    <input id="bioibanInput" class="iban" readonly value="">
+    <button id="copyBioIBANBtn" title="Copy" data-i18n="common.copy">📋</button>
+
+    <span id="bioLineText"></span>
+    <span id="utcTime"></span>
+    <button id="rotatePinBtn" class="link" data-i18n="pin.rotate">Rotate PIN</button>
+  </header>
+
+  <div class="balance‑box">
+    <h2><span id="tvmBalance">Balance: 0 TVM</span></h2>
+    <p id="usdBalance">Equivalent 0 USD</p>
+    <p id="tvmClaimable"></p>
+
+    <label data-i18n="wallet.address">Wallet address</label>
+    <input id="userWalletAddress" autocomplete="off">
+    <button id="saveWalletBtn"  data-i18n="wallet.save">Save</button>
+    <button id="autoConnectWalletBtn" data-i18n="wallet.connect">Auto‑connect</button>
+  </div>
+
+  <!-- ▸ Catch‑Out -->
+  <section class="pane">
+    <h3 data-i18n="catchout.title">Send (“Catch‑Out”)</h3>
+    <input id="receiverBioIBAN" placeholder="Receiver Bio‑IBAN">
+    <input id="catchOutAmount"  type="number" min="1" placeholder="Amount">
+    <button id="catchOutBtn" data-i18n="catchout.send">Export & Copy</button>
+  </section>
+
+  <!-- ▸ Catch‑In -->
+  <section class="pane">
+    <h3 data-i18n="catchin.title">Receive (“Catch‑In”)</h3>
+    <textarea id="catchInBioCatch" rows="4"
+              placeholder="Paste the received payload here"></textarea>
+    <button id="catchInBtn" data-i18n="catchin.claim">Claim</button>
+  </section>
+
+  <!-- ▸ Transactions table -->
+  <section class="pane">
+    <h3 data-i18n="tx.title">Transactions</h3>
+    <table>
+      <thead>
+        <tr><th>Bio‑IBAN</th><th>Bio‑Catch</th><th>Amt</th><th>Date</th><th>Status</th></tr>
+      </thead>
+      <tbody id="transactionBody"></tbody>
+    </table>
+    <p id="txEmptyState" data-i18n="tx.empty">No transactions yet.</p>
+    <button id="txPrevBtn">◄</button>
+    <button id="txNextBtn">►</button>
+    <button id="exportBtn" class="link" data-i18n="tx.export">CSV</button>
+  </section>
+
+  <!-- ▸ Backup banner -->
+  <div id="onboardingTip" class="banner">
+    <strong data-i18n="backup.tip">Back up your vault!</strong>
+    <button id="exportBackupBtn"  data-i18n="backup.enc">Encrypted backup</button>
+    <button id="exportFriendlyBtn" data-i18n="backup.raw">Friendly .vault</button>
+    <input  id="importVaultFileInput" type="file" hidden>
+  </div>
+</section>
+
+<!-- ───────────────────────── Bio‑Catch popup ────────────────────────────── -->
+<div id="bioCatchPopup" class="modal" role="dialog" aria-modal="true"
+     aria-labelledby="bioCatchTitle" tabindex="-1">
+  <div class="modal-content">
+    <h2 id="bioCatchTitle" data-i18n="catchcode.title">Your Bio‑Catch</h2>
+    <p id="bioCatchNumberText" class="code">‑‑</p>
+    <button id="copyBioCatchBtn" data-i18n="common.copy">Copy</button>
+    <button id="closeBioCatchPopup" class="modal-close"
+            aria-label="Close">✕</button>
+  </div>
+</div>
+
+<!-- ───────────────────────── Onboarding modal ───────────────────────────── -->
+<div id="onboardingModal" class="modal" role="dialog" aria-modal="true"
+     aria-labelledby="onbTitle" tabindex="-1">
+  <div class="modal-content">
+    <h2 id="onbTitle" data-i18n="onboard.title">Welcome</h2>
+    <p data-i18n="onboard.body">Choose a passphrase to create your vault.</p>
+    <button class="modal-close primary" data-i18n="common.ok">OK</button>
+  </div>
+</div>
+
+<!-- ───────────────────────── Unlock modal ──────────────────────────────── -->
+<div id="passModal" class="modal" role="dialog" aria-modal="true"
+     aria-labelledby="passTitle" tabindex="-1">
+  <div class="modal-content">
+    <h2 id="passTitle" data-i18n="unlock.title">Unlock Vault</h2>
+    <input id="passModalInput" type="password" autocomplete="off"
+           placeholder="Passphrase">
+    <button id="passModalSaveBtn" class="primary" data-i18n="common.unlock">Unlock</button>
+  </div>
+</div>
+
+<!-- ───────────────────────── Toast / status bar ────────────────────────── -->
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- ───────────────────────── Scripts ───────────────────────────────────── -->
+<script src="main.js" defer></script>
 <script>
+/* — register SW once everything else loaded — */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () =>
-    navigator.serviceWorker
-      .register('./sw.js')
-      .then(r=>console.log('SW',r.scope))
-      .catch(console.error));
+    navigator.serviceWorker.register('/sw.js'));
 }
 </script>
-
-<!-- ethers.js UMD -->
-<script src="https://cdn.jsdelivr.net/npm/ethers@5.7.umd/dist/ethers.min.js"></script>
-
-<!-- VERY light css; .show toggled by JS -->
-<style>
-body{background:linear-gradient(to left,#2f4979,#15264d);color:#fff;font-family:sans-serif;margin:0;padding:20px;min-height:100vh;text-align:center}
-.hidden{display:none}
-
-/* simple modal */
-.modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);display:none;justify-content:center;align-items:center;z-index:9999}
-.modal.show{display:flex}
-.modal .popup-content{background:#fff;color:#000;padding:20px;border-radius:8px;max-width:420px;width:90%}
-
-/* toast */
-#toast{display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1e40af;color:#fff;padding:10px 20px;border-radius:6px}
-.toast-error{background:#b91c1c}
-
-/* transaction pager */
-#txPrevBtn,#txNextBtn{margin:10px}
-</style>
-</head>
-
-<body>
-<!-- toast -->
-<div id="toast"></div>
-
-<!-- backup‑reminder banner -->
-<div id="onboardingTip" style="display:none;margin:10px;padding:10px;background:#fde047;color:#000;border-radius:6px">
-  <strong>Reminder:</strong> Export an encrypted backup or .vault file!
-</div>
-
-<!-- Locked Screen -->
-<div id="lockedScreen">
-  <h1>Bio‑Vault</h1>
-  <h2>WELCOME TO YOUR VAULT<br>WHERE THE TRUE VALUE OF MONEY IS.</h2>
-  <button id="enterVaultBtn">Enter Vault</button>
-</div>
-
-<!-- Passphrase Modal (class=modal) -->
-<div id="passModal" class="modal">
-  <div class="popup-content">
-    <h3 id="passModalTitle">Enter Passphrase</h3>
-    <input type="password" id="passModalInput" placeholder="Enter passphrase"><br>
-    <button id="passModalCancelBtn">Cancel</button>
-    <button id="passModalSaveBtn">Unlock</button>
-  </div>
-</div>
-
-<!-- Onboarding Modal -->
-<div id="onboardingModal" class="modal">
-  <div class="popup-content">
-    <h3>Welcome to Bio‑Vault!</h3>
-    <p>Click “Got it” to create your vault.</p>
-    <button class="modal-close">Got it</button>
-  </div>
-</div>
-
-<!-- Lock / Terminate -->
-<button id="lockVaultBtn" class="hidden">Lock Vault</button>
-<button id="terminateBtn" class="hidden">Terminate</button>
-
-<!-- Main Vault UI -->
-<div id="vaultUI" class="hidden">
-  <!-- Bio‑IBAN -->
-  <div>
-    <label>Your Bio‑IBAN</label><br>
-    <input id="bioibanInput" readonly style="width:70%;max-width:340px">
-    <button id="copyBioIBANBtn">Copy</button>
-  </div>
-
-  <!-- Balances -->
-  <div id="tvmBalance">Balance 0 TVM</div>
-  <div id="usdBalance">Equivalent 0 USD</div>
-  <div id="segBalance"></div>
-
-
-  <!-- Bio‑Line & UTC -->
-  <div id="bioLineUTCContainer">
-    <span id="bioLineText">🔄 BonusConstant 0</span>
-    <span id="utcTime">UTC …</span>
-  </div>
-
-  <!-- Wallet -->
-  <div>
-    <input id="userWalletAddress" placeholder="0xWallet…" style="width:60%;max-width:300px">
-    <button id="saveWalletBtn">Save</button>
-    <button id="autoConnectWalletBtn">MetaMask</button>
-  </div>
-
-  <!-- Catch‑In -->
-  <div id="catchInSection">
-    <input id="catchInBioCatch" placeholder="Bio‑Catch #">
-    <input id="catchInAmount" type="number" placeholder="Amount">
-    <button id="catchInBtn">Catch In</button>
-  </div>
-
-  <!-- Catch‑Out -->
-  <div id="catchOutSection">
-    <input id="receiverBioIBAN" placeholder="Receiver Bio‑IBAN">
-    <input id="catchOutAmount" type="number" placeholder="Amount">
-    <button id="showBioCatchBtn">Generate Bio‑Catch</button>
-    <button id="catchOutBtn">Catch Out</button>
-  </div>
-
-  <!-- Claimable TVM -->
-  <h4 id="tvmClaimable">TVM Claimable: 0</h4>
-  <button id="claimTvmBtn">Claim TVM</button>
-
-  <!-- Transactions -->
-  <h3>Transaction History</h3>
-  <button id="exportBtn">Export CSV</button>
-  <button id="exportBackupBtn">Encrypted Backup</button>
-  <button id="exportFriendlyBtn">.vault Backup</button>
-  <input type="file" id="importVaultFileInput" accept=".vault">
-  <table id="transactionTable">
-    <thead>
-      <tr><th>Bio‑IBAN</th><th>Bio‑Catch</th><th>Amount</th><th>Date</th><th>Status</th></tr>
-    </thead>
-    <tbody id="transactionBody"></tbody>
-  </table>
-  <button id="txPrevBtn">← Prev</button>
-  <button id="txNextBtn">Next →</button>
-  <div id="txEmptyState" style="display:none">No transactions yet</div>
-</div>
-
-<!-- Bio‑Catch Popup -->
-<div id="bioCatchPopup" class="modal">
-  <div class="popup-content">
-    <h3>Your new Bio‑Catch</h3>
-    <p id="bioCatchNumberText"></p>
-    <button id="copyBioCatchBtn">Copy</button>
-    <button id="closeBioCatchPopup">Close</button>
-  </div>
-</div>
-
-<!-- Footer / Rotate‑PIN -->
-<div style="margin-top:30px">
-  <button id="rotatePinBtn">Rotate Passphrase</button>
-  <p>By RR.R — for Humanity</p>
-</div>
-
-<!-- Vault logic -->
-<script type="module" src="main.js"></script>
 </body>
 </html>
