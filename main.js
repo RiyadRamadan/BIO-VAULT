@@ -961,6 +961,52 @@ window.addEventListener("DOMContentLoaded",()=>safeHandler(async()=>{
   }
 }));
 
+document.getElementById("saveWalletBtn")
+  ?.addEventListener("click", () => safeHandler(async () => {
+    const addr = document.getElementById("userWalletAddress").value.trim();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) throw new Error("Bad address");
+    const v = VaultService.current; v.walletAddress = addr;
+    await VaultService.persist();
+    toast("Wallet address saved");
+}));
+
+document.getElementById("autoConnectWalletBtn")
+  ?.addEventListener("click", () => safeHandler(async () => {
+    ChainService.initWeb3();
+    await window.ethereum?.request({ method: "eth_requestAccounts" });
+    const signer = ChainService.getSigner();
+    const addr   = signer ? await signer.getAddress() : "";
+    if (addr) {
+      document.getElementById("userWalletAddress").value = addr;
+      document.getElementById("saveWalletBtn").click();          // auto‑save
+    } else {
+      toast("Wallet connect failed", true);
+    }
+}));
+/* focus‑return helper – add once in main.js */
+function trapFocus(modal){
+  const focusable = modal.querySelectorAll("a,button,input,textarea,[tabindex]:not([tabindex='-1'])");
+  const first = focusable[0], last = focusable[focusable.length-1];
+  modal.addEventListener("keydown", e=>{
+    if(e.key!=="Tab") return;
+    if(e.shiftKey && document.activeElement===first){ e.preventDefault(); last.focus(); }
+    if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
+  });
+}
+document.querySelectorAll(".modal").forEach(m=>{
+  m.addEventListener("show",()=>{ m.focus(); trapFocus(m); });
+  m.addEventListener("hide",()=>{ lastInvoker?.focus(); });
+});
+
+fetch(`i18n/${navigator.language.split("-")[0]||"en"}.json`)
+  .then(r=>r.json())
+  .then(dict=>{
+    document.querySelectorAll("[data-i18n]").forEach(el=>{
+      el.textContent = dict[el.dataset.i18n] || el.textContent;
+    });
+  });
+
+
 /*────────────────────────── 24. EXPORT GLOBAL API ─────────────────────────*/
 window.BalanceChain = Object.freeze({
   Protocol, Limits,
