@@ -4,7 +4,7 @@
 "use strict";
 
 /*──────────────────────── 1. CONSTANTS ───────────────────────────────*/
-const GENESIS_TIMESTAMP = 1736565605; 
+const GENESIS_TIMESTAMP = 1577836800; // Jan 1, 2020, 00:00:00 UTC (Point 1: Universal genesis)
 const Protocol = Object.freeze({
   GENESIS_BIO_CONST: GENESIS_TIMESTAMP,
   SEGMENTS: Object.freeze({
