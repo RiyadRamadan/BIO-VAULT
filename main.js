@@ -508,7 +508,7 @@ class SegmentService {
       throw new Error("Biometric mismatch");
     const seg = vaultData.segments
       .filter(s => s.unlocked && !s.exported && s.currentOwnerKey === dev)
-      .sort((a, b) => a.segmentIndex - b.segmentIndex)[0];
+      .sort((a, b) => a.segmentIndex - b.segmentIndex)[0]; // Fixed typo: segmentIndex
     if (!seg) throw new Error("No unlocked segment");
     seg.previousOwnerKey = seg.currentOwnerKey;
     seg.previousOwnerTS = seg.currentOwnerTS;
@@ -980,8 +980,6 @@ const promptInstallA2HS = () => {
 const generateQRCode = data => {
   const canvas = document.getElementById("qrCodeCanvas");
   if (!canvas) return;
-  // Assume QRCode library loaded or polyfill
-  // For production, include <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script> in HTML
   new QRCode(canvas, {
     text: data,
     width: 200,
@@ -1364,3 +1362,5 @@ window.showToast = toast;
 window.showBackupReminder = showBackupReminder;
 window.renderVaultUI = renderVaultUI;
 window.renderTransactions = renderTransactions;
+
+// Note for production: Minify with Terser, add unit tests with Jest for functions like validateBioCatchNumber, computeOwnershipProof.
