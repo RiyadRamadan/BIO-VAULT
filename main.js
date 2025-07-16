@@ -778,14 +778,6 @@ document.getElementById("autoConnectWalletBtn")?.addEventListener("click",()=>sa
   else toast("Wallet connect failed",true);
 }));
 
-/*──────────────────────── 25. I18N (async) ─────────────────────────*/
-fetch(`i18n/${(navigator.language.split("-")[0]||"en")}.json`)
-  .then(r=>r.json()).then(dict=>{
-    document.querySelectorAll("[data-i18n]").forEach(el=>{
-      el.textContent=dict[el.dataset.i18n]||el.textContent;
-    });
-  });
-
 /*──────────────────────── 26. GLOBAL EXPORT ────────────────────────*/
 window.BalanceChain=Object.freeze({
   Protocol, Limits,
