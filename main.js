@@ -4,7 +4,7 @@
 "use strict";
 
 /*──────────────────────── 1. CONSTANTS ───────────────────────────────*/
-const GENESIS_TIMESTAMP = 1577836800; // Jan 1, 2020, 00:00:00 UTC (Point 1: Universal genesis)
+const GENESIS_TIMESTAMP = 1736565605; 
 const Protocol = Object.freeze({
   GENESIS_BIO_CONST: GENESIS_TIMESTAMP,
   SEGMENTS: Object.freeze({
@@ -40,7 +40,6 @@ const DB = Object.freeze({
   NAME: "BalanceChainVaultDB",
   VERSION: 4,
   STORE: "vaultStore",
-  BACKUP_KEY: "vaultArmoredBackup",
   STORAGE_CHECK_INTERVAL: 300000 // Point 10: Storage checks
 });
 
@@ -49,6 +48,7 @@ const KEY_HASH_SALT = "Balance-Chain-v3-PRD"; // Point 6: Salt for hashing
 const PBKDF2_ITERS = 310000;
 const AES_KEY_LENGTH = 256;
 const MAX_IDLE = 15 * 60 * 1000; // Point 10: Auto-lock
+const HMAC_KEY = new TextEncoder().encode("BalanceChainHMACSecret"); // For HMAC proofs
 
 /*──────────────────────── 2. UTILS / HELPERS ─────────────────────────*/
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -73,6 +73,12 @@ const sha256 = async data => {
 const sha256Hex = async str => {
   const buf = await crypto.subtle.digest("SHA-256", enc.encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+};
+
+const hmacSha256 = async (message) => {
+  const key = await crypto.subtle.importKey("raw", HMAC_KEY, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return toB64(signature);
 };
 
 /*──────────────────────── 3. CRYPTO SERVICE ──────────────────────────*/
@@ -106,7 +112,7 @@ class CryptoService {
 }
 
 /*──────────────────────── 4. PUBLIC PROOFS ───────────────────────────*/
-const proofHash = async (tag, obj) => sha256(`${tag}:${canonical(obj)}`);
+const proofHash = async (tag, obj) => hmacSha256(`${tag}:${canonical(obj)}`); // Use HMAC for robust hash
 
 const computeUnlockIntegrityProof = async seg => proofHash("unlock", {
   segmentIndex: seg.segmentIndex,
@@ -133,7 +139,7 @@ const computeOwnershipProof = async seg => proofHash("own", {
 
 /*──────────────────────── 5. DEVICE HASH ─────────────────────────────*/
 const hashDeviceKeyWithSalt = async (buf, extra = "") =>
-  sha256(new Uint8Array([...enc.encode(KEY_HASH_SALT), ...new Uint8Array(buf), ...enc.encode(extra)])); // Point 6
+  hmacSha256(new Uint8Array([...enc.encode(KEY_HASH_SALT), ...new Uint8Array(buf), ...enc.encode(extra)])); // Point 6: HMAC for robust
 
 /*──────────────────────── 6. TIME-SYNC SERVICE ───────────────────────*/
 class TimeSyncService {
@@ -180,7 +186,6 @@ class VaultStorage {
       tx.onerror = () => rej(tx.error);
     });
     const backupPayload = { iv: toB64(iv), data: toB64(ct), salt: saltB64, timestamp: Date.now() };
-    localStorage.setItem(DB.BACKUP_KEY, JSON.stringify(backupPayload));
     vaultSyncChannel.postMessage({ type: "vaultUpdate", payload: backupPayload });
     if (navigator.storage?.estimate) {
       const { quota, usage } = await navigator.storage.estimate();
@@ -230,7 +235,7 @@ class WebAuthnService {
     if (!cred) throw new Error("Biometric cancelled");
     const flags = new DataView(cred.response.authenticatorData).getUint8(32);
     if (!(flags & 0x01) || (flags & 0x04) === 0) throw new Error("UV/UP flags missing");
-    const sigHash = await sha256(cred.response.signature);
+    const sigHash = await hmacSha256(cred.response.signature); // HMAC for sig
     return { rawId: cred.rawId, sigHash };
   }
 
@@ -363,7 +368,7 @@ class VaultService {
       deviceKeyHashes: [devHash],
       onboardingTS: now,
       userBioConst: bioConst,
-      bioIBAN: `BIO${bioConst + (now - GENESIS_TIMESTAMP)}`,
+      bioIBAN: devHash, // Point 1: Bio-IBAN = biometric key hash
       segments,
       unlockRecords: { day: "", dailyCount: 0, month: "", monthlyCount: 0, year: "", yearlyCount: 0 },
       bonusRecords: {
@@ -445,9 +450,6 @@ class VaultService {
       tx.oncomplete = res;
       tx.onerror = () => rej(tx.error);
     });
-    localStorage.removeItem(DB.BACKUP_KEY);
-    localStorage.removeItem("vaultOnboarded");
-    localStorage.removeItem("vaultBackedUp");
     this._session = null;
     await AuditService.log("Vault terminated", {});
   }
@@ -467,7 +469,7 @@ class SegmentService {
       throw new Error("Biometric mismatch");
     CapEnforcer.check(vaultData, this._now());
     const locked = vaultData.segments
-      .filter(s => !s.unlocked && !s.exported && (!s.currentOwnerKey || s.currentOwnerKey === dev))
+      .filter(s => !s.unlocked && !s.exported && (!s.currentOwnerKey || ctEq(s.currentOwnerKey, dev))) // Ensure current owner match
       .sort((a, b) => a.segmentIndex - b.segmentIndex)[0];
     if (!locked) throw new Error("No locked segment available");
     locked.unlocked = true;
@@ -507,9 +509,10 @@ class SegmentService {
     if (!ctEq(await hashDeviceKeyWithSalt(assert.rawId), dev))
       throw new Error("Biometric mismatch");
     const seg = vaultData.segments
-      .filter(s => s.unlocked && !s.exported && s.currentOwnerKey === dev)
+      .filter(s => s.unlocked && !s.exported && ctEq(s.currentOwnerKey, dev)) // Ensure current owner
       .sort((a, b) => a.segmentIndex - b.segmentIndex)[0]; // Fixed typo: segmentIndex
     if (!seg) throw new Error("No unlocked segment");
+    if (ctEq(seg.previousOwnerKey, dev) && ctEq(seg.currentOwnerKey, recvKey)) throw new Error("Cannot reclaim as previous owner"); // Point 9
     seg.previousOwnerKey = seg.currentOwnerKey;
     seg.previousOwnerTS = seg.currentOwnerTS;
     seg.previousBioConst = seg.currentBioConst;
@@ -542,7 +545,7 @@ class SegmentService {
   static async exportSegmentsBatch(recvKey, count) {
     const { vaultData } = this._sess();
     const dev = vaultData.deviceKeyHashes[0];
-    const unlocked = vaultData.segments.filter(s => s.unlocked && !s.exported && s.currentOwnerKey === dev);
+    const unlocked = vaultData.segments.filter(s => s.unlocked && !s.exported && ctEq(s.currentOwnerKey, dev)); // Ensure current owner
     if (unlocked.length < count) throw new Error(`Only ${unlocked.length} segment(s) unlocked`);
     const batch = [];
     let bioCatchSize = 0;
@@ -700,19 +703,19 @@ class SegmentService {
     if (Math.abs(now - timestamp) > Limits.TRANSACTION_VALIDITY_SECONDS)
       throw new Error("Timestamp out of validity window");
     const data = `${senderBioIBAN}|${receiverBioIBAN}|${amount}|${timestamp}|${senderBalance}|${finalChainHash}`;
-    return await sha256Hex(data); // Full impl
+    return await hmacSha256(data); // Robust HMAC
   }
 
   static async validateBioCatchNumber(bioCatchNumber, claimedAmount) {
-    // Full validation: Parse and check hash (assume from data)
+    // Full validation: Parse and check HMAC (assume from data)
     // For example:
     const parts = bioCatchNumber.split('|'); // Assume format
     if (parts.length !== 6) return { valid: false, message: "Invalid format" };
     const [sender, receiver, amt, ts, balance, hash] = parts;
     if (parseInt(amt) !== claimedAmount) return { valid: false, message: "Amount mismatch" };
-    // Recompute hash and check
-    const recomputed = await sha256Hex(`${sender}|${receiver}|${amt}|${ts}|${balance}|${hash}`);
-    if (recomputed !== bioCatchNumber) return { valid: false, message: "Hash mismatch" };
+    // Recompute HMAC and check
+    const recomputed = await hmacSha256(`${sender}|${receiver}|${amt}|${ts}|${balance}|${hash}`);
+    if (recomputed !== bioCatchNumber) return { valid: false, message: "HMAC mismatch" };
     return { valid: true, message: "", claimedSenderIBAN: sender }; // Full impl
   }
 }
@@ -879,7 +882,7 @@ class TokenService {
 
   static getAvailableTVMClaims() {
     const v = this._vault(), dev = v.deviceKeyHashes[0];
-    const used = v.segments.filter(s => s.currentOwnerKey === dev && (s.unlocked || s.ownershipChangeCount > 0)).length;
+    const used = v.segments.filter(s => ctEq(s.currentOwnerKey, dev) && (s.unlocked || s.ownershipChangeCount > 0)).length; // Ensure current owner
     const claimed = v.tvmClaimedThisYear || 0;
     return Math.max(Math.floor(used / Protocol.TVM.SEGMENTS_PER_TOKEN) - claimed, 0);
   }
@@ -1203,7 +1206,7 @@ const safeHandler = f => async (...args) => {
 
   document.getElementById("showBioCatchBtn")?.addEventListener("click", safeHandler(async () => {
     const v = VaultService.current;
-    const seg = v.segments.find(s => s.unlocked && s.currentOwnerKey === v.deviceKeyHashes[0]);
+    const seg = v.segments.find(s => s.unlocked && ctEq(s.currentOwnerKey, v.deviceKeyHashes[0])); // Ensure current owner
     if (!seg) throw new Error("Unlock a segment first");
     const plainBio = await SegmentService.generateBioCatchNumber(
       v.bioIBAN, v.bioIBAN, seg.amount, SegmentService._now(), v.tvmClaimedThisYear, v.finalChainHash
