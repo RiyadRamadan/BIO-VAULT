@@ -4,10 +4,9 @@
 "use strict";
 
 /*──────────────────────── 1. CONSTANTS ───────────────────────────────*/
-// Fixed genesis timestamp (Jan 1, 2020, 00:00:00 UTC)
-const GENESIS_TIMESTAMP = 1577836800; // Unix epoch + constant
+const GENESIS_TIMESTAMP = 1577836800; // Jan 1, 2020, 00:00:00 UTC
 const Protocol = Object.freeze({
-  GENESIS_BIO_CONST: GENESIS_TIMESTAMP, // Fixed global anchor
+  GENESIS_BIO_CONST: GENESIS_TIMESTAMP,
   SEGMENTS: Object.freeze({
     TOTAL: 12000,
     UNLOCKED_INIT: 1200,
@@ -18,26 +17,23 @@ const Protocol = Object.freeze({
   TVM: Object.freeze({
     SEGMENTS_PER_TOKEN: 12,
     CLAIM_CAP: 1000,
-    EXCHANGE_RATE: 12 // 1 USD = 12 SHE (Standard Human Effort, 1 min each)
+    EXCHANGE_RATE: 12 // 1 USD = 12 SHE
   }),
-  HISTORY_MAX: 20, // Limit ownership change history for privacy
+  HISTORY_MAX: 20,
   BONUS: Object.freeze({
     PER_TX: 120,
     MAX_PER_DAY: 3,
     MAX_PER_MONTH: 30,
     MAX_ANNUAL_TVM: 10800,
     MIN_SEND_AMOUNT: 240
-  }),
-  // SHE Peg Documentation:
-  // 1 TVM = 12 SHE (12 min). Derived from 100-year avg GDP/capita ($10,000/year),
-  // 2000 work hours/year => $5/hour => 1 USD = 12 min = 12 SHE.
+  })
 });
 
 const Limits = Object.freeze({
   AUTH: Object.freeze({ MAX_ATTEMPTS: 5, LOCKOUT_SECONDS: 3600 }),
   PAGE: Object.freeze({ DEFAULT_SIZE: 10 }),
-  TRANSACTION_VALIDITY_SECONDS: 720, // ±12 min
-  BATCH_SIZE: 10000 // Max segments per batch for large transfers
+  TRANSACTION_VALIDITY_SECONDS: 720,
+  BATCH_SIZE: 10000
 });
 
 const DB = Object.freeze({
@@ -45,13 +41,14 @@ const DB = Object.freeze({
   VERSION: 4,
   STORE: "vaultStore",
   BACKUP_KEY: "vaultArmoredBackup",
-  STORAGE_CHECK_INTERVAL: 300000 // 5 min
+  STORAGE_CHECK_INTERVAL: 300000
 });
 
 const vaultSyncChannel = new BroadcastChannel("vault-sync");
 const KEY_HASH_SALT = "Balance-Chain-v3-PRD";
 const PBKDF2_ITERS = 310000;
 const AES_KEY_LENGTH = 256;
+const MAX_IDLE = 15 * 60 * 1000; // 15 minutes
 
 /*──────────────────────── 2. UTILS / HELPERS ─────────────────────────*/
 const enc = new TextEncoder(), dec = new TextDecoder();
@@ -59,7 +56,6 @@ const toB64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
 const fromB64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
 const rand = len => crypto.getRandomValues(new Uint8Array(len));
 
-/** @description Constant-time string comparison */
 const ctEq = (a = "", b = "") => {
   if (a.length !== b.length) return false;
   let res = 0;
@@ -67,81 +63,51 @@ const ctEq = (a = "", b = "") => {
   return res === 0;
 };
 
-/** @description Canonical JSON for stable proofs */
 const canonical = obj => JSON.stringify(obj, Object.keys(obj).sort());
 
-/** @description SHA-256 hash */
 const sha256 = async data => {
   const buf = await crypto.subtle.digest("SHA-256", typeof data === "string" ? enc.encode(data) : data);
   return toB64(buf);
 };
 
-/** @description SHA-256 to hex for BioCatch */
 const sha256Hex = async str => {
   const buf = await crypto.subtle.digest("SHA-256", enc.encode(str));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 };
 
 /*──────────────────────── 3. CRYPTO SERVICE ──────────────────────────*/
-/** @description Cryptographic operations for vault and bio-catch */
 class CryptoService {
-  /** @param {string} pin - User passphrase
-   * @param {ArrayBuffer} salt - Random salt
-   * @returns {Promise<CryptoKey>} Derived AES key
-   */
-  static deriveKey(pin, salt) {
-    return crypto.subtle.importKey("raw", enc.encode(pin), "PBKDF2", false, ["deriveKey"])
-      .then(mat => crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" },
-        mat, { name: "AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt", "decrypt"]
-      ));
+  static async deriveKey(pin, salt) {
+    const mat = await crypto.subtle.importKey("raw", enc.encode(pin), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" },
+      mat, { name: "AES-GCM", length: AES_KEY_LENGTH }, false, ["encrypt", "decrypt"]
+    );
   }
 
-  /** @param {CryptoKey} key - AES key
-   * @param {Object} obj - Data to encrypt
-   * @returns {Promise<{iv: ArrayBuffer, ct: ArrayBuffer}>} IV and ciphertext
-   */
-  static encrypt(key, obj) {
+  static async encrypt(key, obj) {
     const iv = rand(12);
-    return crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj)))
-      .then(ct => ({ iv, ct }));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(obj)));
+    return { iv, ct };
   }
 
-  /** @param {CryptoKey} key - AES key
-   * @param {ArrayBuffer} iv - Initialization vector
-   * @param {ArrayBuffer} ct - Ciphertext
-   * @returns {Promise<Object>} Decrypted object
-   */
-  static decrypt(key, iv, ct) {
-    return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct)
-      .then(pt => JSON.parse(dec.decode(pt)));
+  static async decrypt(key, iv, ct) {
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+    return JSON.parse(dec.decode(pt));
   }
 
-  /** @param {string} plainText - Bio-catch string
-   * @returns {Promise<string>} Base64-encoded bio-catch
-   */
   static async encryptBioCatchNumber(plainText) {
     return toB64(enc.encode(plainText));
   }
 
-  /** @param {string} encStr - Base64-encoded bio-catch
-   * @returns {Promise<string|null>} Decoded bio-catch or null on error
-   */
   static async decryptBioCatchNumber(encStr) {
     try { return dec.decode(fromB64(encStr)); } catch { return null; }
   }
 }
 
 /*──────────────────────── 4. PUBLIC PROOFS ───────────────────────────*/
-/** @param {string} tag - Proof type
- * @param {Object} obj - Segment data
- * @returns {Promise<string>} Base64-encoded SHA-256 proof
- */
 const proofHash = (tag, obj) => sha256(`${tag}:${canonical(obj)}`);
 
-/** @param {Object} seg - Segment
- * @returns {Promise<string>} Unlock integrity proof
- */
 const computeUnlockIntegrityProof = seg => proofHash("unlock", {
   segmentIndex: seg.segmentIndex,
   currentOwnerKey: seg.currentOwnerKey,
@@ -150,9 +116,6 @@ const computeUnlockIntegrityProof = seg => proofHash("unlock", {
   unlockTriggerBioConst: seg.unlockTriggerBioConst
 });
 
-/** @param {Object} seg - Segment
- * @returns {Promise<string>} Spent proof
- */
 const computeSpentProof = seg => proofHash("spent", {
   segmentIndex: seg.segmentIndex,
   previousOwnerKey: seg.previousOwnerKey,
@@ -161,9 +124,6 @@ const computeSpentProof = seg => proofHash("spent", {
   currentBioConst: seg.currentBioConst
 });
 
-/** @param {Object} seg - Segment
- * @returns {Promise<string>} Ownership proof
- */
 const computeOwnershipProof = seg => proofHash("own", {
   segmentIndex: seg.segmentIndex,
   currentOwnerKey: seg.currentOwnerKey,
@@ -172,19 +132,13 @@ const computeOwnershipProof = seg => proofHash("own", {
 });
 
 /*──────────────────────── 5. DEVICE HASH ─────────────────────────────*/
-/** @param {ArrayBuffer} buf - Raw credential ID
- * @param {string} extra - Additional data
- * @returns {Promise<string>} Hashed device key
- */
 const hashDeviceKeyWithSalt = (buf, extra = "") =>
   sha256(new Uint8Array([...enc.encode(KEY_HASH_SALT), ...new Uint8Array(buf), ...enc.encode(extra)]));
 
 /*──────────────────────── 6. TIME-SYNC SERVICE ───────────────────────*/
-/** @description Synchronizes local time with world clock */
 class TimeSyncService {
   static _offset = 0;
 
-  /** @returns {Promise<void>} Syncs time offset */
   static async sync() {
     try {
       const { unixtime } = await fetch("https://worldtimeapi.org/api/ip", { cache: "no-store" }).then(r => r.json());
@@ -192,14 +146,16 @@ class TimeSyncService {
     } catch { console.warn("⏰ Time-sync failed – using local clock"); }
   }
 
-  /** @returns {number} Adjusted Unix timestamp */
   static now() { return Math.floor(Date.now() / 1000) + this._offset; }
+
+  static updateUTCClock() {
+    const el = document.getElementById("utcTime");
+    if (el) el.textContent = `UTC: ${new Date().toUTCString()}`;
+  }
 }
 
 /*──────────────────────── 7. INDEXED-DB LAYER ────────────────────────*/
-/** @description Manages local vault storage */
 class VaultStorage {
-  /** @returns {Promise<IDBDatabase>} Opens IndexedDB */
   static _open() {
     return new Promise((res, rej) => {
       const req = indexedDB.open(DB.NAME, DB.VERSION);
@@ -215,12 +171,6 @@ class VaultStorage {
     });
   }
 
-  /** @param {ArrayBuffer} iv - IV
-   * @param {ArrayBuffer} ct - Ciphertext
-   * @param {string} saltB64 - Base64 salt
-   * @param {Object} meta - Metadata
-   * @returns {Promise<void>} Saves vault
-   */
   static async save(iv, ct, saltB64, meta) {
     const db = await this._open();
     await new Promise((res, rej) => {
@@ -232,14 +182,12 @@ class VaultStorage {
     const backupPayload = { iv: toB64(iv), data: toB64(ct), salt: saltB64, timestamp: Date.now() };
     localStorage.setItem(DB.BACKUP_KEY, JSON.stringify(backupPayload));
     vaultSyncChannel.postMessage({ type: "vaultUpdate", payload: backupPayload });
-    // Check storage quota
     if (navigator.storage?.estimate) {
       const { quota, usage } = await navigator.storage.estimate();
       if (usage / quota > 0.9) console.warn("⚠️ Storage quota nearing limit");
     }
   }
 
-  /** @returns {Promise<Object|null>} Loads vault */
   static async load() {
     const db = await this._open();
     return new Promise((res, rej) => {
@@ -255,10 +203,8 @@ class VaultStorage {
   }
 }
 
-/*──────────────────────── 8. WEBAUTHN HELPERS ────────────────────────*/
-/** @description Handles biometric authentication */
+/*──────────────────────── 8. WEBAUTHN HELPERS ───────────────────────*/
 class WebAuthnService {
-  /** @returns {Promise<ArrayBuffer>} Enrolls new biometric credential */
   static async enroll() {
     if (!navigator.credentials?.create) throw new Error("WebAuthn unsupported");
     const rp = { name: "BalanceChain", id: location.hostname };
@@ -275,9 +221,6 @@ class WebAuthnService {
     return cred.rawId;
   }
 
-  /** @param {string} credIdB64 - Base64 credential ID
-   * @returns {Promise<{rawId: ArrayBuffer, sigHash: string}>} Assertion result
-   */
   static async assert(credIdB64) {
     const allow = [{ id: fromB64(credIdB64), type: "public-key" }];
     const cred = await navigator.credentials.get({
@@ -291,10 +234,6 @@ class WebAuthnService {
     return { rawId: cred.rawId, sigHash };
   }
 
-  /** @param {ArrayBuffer} rawId - Raw credential ID
-   * @param {string} storedHash - Stored device key hash
-   * @returns {Promise<boolean>} Verifies local key
-   */
   static async verifyLocalKey(rawId, storedHash) {
     const computedHash = await hashDeviceKeyWithSalt(rawId);
     return ctEq(computedHash, storedHash);
@@ -302,9 +241,6 @@ class WebAuthnService {
 }
 
 /*──────────────────────── 9. CAP & HISTORY HELPERS ───────────────────*/
-/** @param {number} ts - Unix timestamp
- * @returns {Object} Period strings
- */
 const periodStrings = ts => {
   const d = new Date(ts * 1000);
   return {
@@ -314,12 +250,7 @@ const periodStrings = ts => {
   };
 };
 
-/** @description Enforces unlock and bonus caps */
 class CapEnforcer {
-  /** @param {Object} vault - Vault data
-   * @param {number} now - Current timestamp
-   * @param {number} cnt - Unlock count
-   */
   static check(vault, now, cnt = 1) {
     const rec = vault.unlockRecords, p = periodStrings(now);
     if (rec.day !== p.day) { rec.day = p.day; rec.dailyCount = 0; }
@@ -335,12 +266,6 @@ class CapEnforcer {
     rec.yearlyCount += cnt;
   }
 
-  /** @param {Object} vault - Vault data
-   * @param {number} now - Current timestamp
-   * @param {string} type - Transaction type (sent/received)
-   * @param {number} amount - Transfer amount
-   * @returns {boolean} Whether bonus is allowed
-   */
   static checkBonus(vault, now, type, amount) {
     const p = periodStrings(now);
     if (vault.bonusRecords.day !== p.day) {
@@ -363,9 +288,6 @@ class CapEnforcer {
     return true;
   }
 
-  /** @param {Object} vault - Vault data
-   * @param {string} type - Transaction type
-   */
   static recordBonus(vault, type) {
     vault.bonusRecords.dailyCount++;
     vault.bonusRecords.monthlyCount++;
@@ -375,13 +297,7 @@ class CapEnforcer {
   }
 }
 
-/** @description Manages segment ownership history */
 class HistoryManager {
-  /** @param {Object} seg - Segment
-   * @param {string} newKey - New owner key
-   * @param {number} ts - Timestamp
-   * @param {string} type - History event type
-   */
   static record(seg, newKey, ts, type) {
     seg.ownershipChangeHistory.push({ ownerKey: newKey, ts, type, changeCount: seg.ownershipChangeCount });
     if (seg.ownershipChangeHistory.length > Protocol.HISTORY_MAX)
@@ -390,13 +306,7 @@ class HistoryManager {
 }
 
 /*──────────────────────── 10. SEGMENT FACTORY ────────────────────────*/
-/** @description Creates initial segment structure */
 class SegmentFactory {
-  /** @param {string} owner - Owner key hash
-   * @param {number} bioConst - User bio-constant
-   * @param {number} ts - Timestamp
-   * @returns {Object[]} Array of segments
-   */
   static createAll(owner, bioConst, ts) {
     return Array.from({ length: Protocol.SEGMENTS.TOTAL }, (_, i) => ({
       segmentIndex: i + 1,
@@ -426,13 +336,9 @@ class SegmentFactory {
 }
 
 /*──────────────────────── 11. VAULT SERVICE ──────────────────────────*/
-/** @description Manages vault lifecycle and state */
 class VaultService {
   static _session = null;
 
-  /** @param {string} credIdB64 - Base64 credential ID
-   * @returns {Promise<ArrayBuffer>} Current device raw ID
-   */
   static async _currentDeviceRawId(credIdB64) {
     if (!window.PublicKeyCredential || !navigator.credentials?.get) return new ArrayBuffer(0);
     const allow = [{ id: fromB64(credIdB64), type: "public-key" }];
@@ -445,9 +351,6 @@ class VaultService {
     } catch { return new ArrayBuffer(0); }
   }
 
-  /** @param {string} pin - User passphrase
-   * @returns {Promise<Object>} Onboarded vault
-   */
   static async onboard(pin) {
     if (pin.length < 8) throw new Error("Passphrase ≥8 chars");
     const rawId = await WebAuthnService.enroll();
@@ -490,9 +393,6 @@ class VaultService {
     return vault;
   }
 
-  /** @param {string} pin - User passphrase
-   * @returns {Promise<Object>} Unlocked vault
-   */
   static async unlock(pin) {
     const rec = await VaultStorage.load();
     if (!rec) throw new Error("No vault found");
@@ -530,33 +430,39 @@ class VaultService {
     return vault;
   }
 
-  /** @description Locks vault */
   static lock() { this._session = null; }
 
-  /** @returns {Object|null} Current vault */
   static get current() { return this._session?.vaultData || null; }
 
-  /** @returns {Promise<void>} Persists vault state */
   static async persist() {
     const s = this._session;
     if (!s) throw new Error("Vault locked");
     const { iv, ct } = await CryptoService.encrypt(s.key, s.vaultData);
     await VaultStorage.save(iv, ct, toB64(s.salt), s.vaultData);
   }
+
+  static async terminate() {
+    const db = await VaultStorage._open();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(DB.STORE, "readwrite");
+      tx.objectStore(DB.STORE).delete("vaultData");
+      tx.oncomplete = res;
+      tx.onerror = () => rej(tx.error);
+    });
+    localStorage.removeItem(DB.BACKUP_KEY);
+    localStorage.removeItem("vaultOnboarded");
+    localStorage.removeItem("vaultBackedUp");
+    this._session = null;
+    await AuditService.log("Vault terminated", {});
+  }
 }
 
 /*──────────────────────── 12. SEGMENT SERVICE ─────────────────────────*/
-/** @description Manages segment operations */
 class SegmentService {
-  /** @returns {number} Current timestamp */
   static _now() { return TimeSyncService.now(); }
 
-  /** @returns {Object} Current session */
   static _sess() { if (!VaultService._session) throw new Error("Vault locked"); return VaultService._session; }
 
-  /** @param {number|null} idxRef - Reference segment index
-   * @returns {Promise<Object>} Unlocked segment
-   */
   static async unlockNextSegment(idxRef = null) {
     const { vaultData } = this._sess();
     const dev = vaultData.deviceKeyHashes[0];
@@ -598,9 +504,6 @@ class SegmentService {
     return locked;
   }
 
-  /** @param {string} recvKey - Receiver key hash
-   * @returns {Promise<Object>} Transferred segment
-   */
   static async transferSegment(recvKey) {
     const { vaultData } = this._sess();
     const dev = vaultData.deviceKeyHashes[0];
@@ -609,7 +512,7 @@ class SegmentService {
       throw new Error("Biometric mismatch");
     const seg = vaultData.segments
       .filter(s => s.unlocked && !s.exported && s.currentOwnerKey === dev)
-      .sort((a, b) => a.segmentIndex - b.segmentIndex)[0];
+      .sort((a, b) => a.segmentIndex - b.semgentIndex)[0];
     if (!seg) throw new Error("No unlocked segment");
     seg.previousOwnerKey = seg.currentOwnerKey;
     seg.previousOwnerTS = seg.currentOwnerTS;
@@ -633,7 +536,6 @@ class SegmentService {
       bioCatch: null,
       status: "Sent"
     });
-    // 1:1 unlock unless receiver is self
     if (recvKey !== dev) {
       try { await this.unlockNextSegment(seg.segmentIndex); } catch (e) { console.warn("Auto-unlock failed:", e.message); }
     }
@@ -641,10 +543,6 @@ class SegmentService {
     return seg;
   }
 
-  /** @param {string} recvKey - Receiver key hash
-   * @param {number} count - Number of segments
-   * @returns {Promise<string>} Bio-catch JSON payload
-   */
   static async exportSegmentsBatch(recvKey, count) {
     const { vaultData } = this._sess();
     const dev = vaultData.deviceKeyHashes[0];
@@ -657,7 +555,6 @@ class SegmentService {
       CapEnforcer.recordBonus(vaultData, "sent");
       bonusGranted = true;
     }
-    // Chunk large transfers
     for (let i = 0; i < count; i += Limits.BATCH_SIZE) {
       const chunk = Math.min(Limits.BATCH_SIZE, count - i);
       for (let j = 0; j < chunk; j++) {
@@ -673,7 +570,7 @@ class SegmentService {
         bioCatchSize += JSON.stringify(payload).length;
       }
     }
-    console.log(`Bio-catch size for ${count} segments: ~${(bioCatchSize / 1024 / 1024).toFixed(2)} MB`);
+    document.getElementById("bioCatchSize").textContent = `Size: ${(bioCatchSize / 1024 / 1024).toFixed(2)} MB`;
     if (bonusGranted) {
       const offset = this._now() - vaultData.onboardingTS;
       const bonusIBAN = `BONUS${vaultData.userBioConst + offset}`;
@@ -692,22 +589,30 @@ class SegmentService {
       bonusTx.txHash = await this.computeTransactionHash(vaultData.lastTransactionHash, bonusTx);
       vaultData.transactionHistory.push(bonusTx);
       vaultData.lastTransactionHash = bonusTx.txHash;
-      vaultData.finalChainHash = await this.computeFullChainHash(vaultData.transactionHistory);
+      vaultData.finalChainHash = await vaultData.transactionHistory.reduce(async (hash, tx) => {
+        const tmp = {
+          type: tx.type, amount: tx.amount, timestamp: tx.timestamp, status: tx.status, bioCatch: tx.bioCatch,
+          bonusConstantAtGeneration: tx.bonusConstantAtGeneration, previousHash: await hash
+        };
+        return this.computeTransactionHash(rHash, tmp);
+      }, Promise.resolve(""));
       if (vaultData.walletAddress && vaultData.credentialId) {
         await ChainService.redeemBonusOnChain(bonusTx);
       }
     }
-    vaultData.finalChainHash = await this.computeFullChainHash(vaultData.transactionHistory);
+    vaultData.finalChainHash = await vaultData.transactionHistory.reduce(async (hash, tx) => {
+      const tmp = {
+        type: tx.type, amount: tx.amount, timestamp: tx.timestamp, status: tx.status, bioCatch: tx.bioCatch,
+        bonusConstantAtGeneration: tx.bonusConstantAtGeneration, previousHash: await hash
+      };
+      return this.computeTransactionHash(await hash, tmp);
+    }, Promise.resolve(""));
     await VaultService.persist();
     const payload = JSON.stringify(batch);
     await AuditService.log("Segments exported", { count, bioCatchSize });
     return payload;
   }
 
-  /** @param {string} raw - Bio-catch JSON
-   * @param {string} recvKey - Receiver key hash
-   * @returns {Promise<Object[]>} Parsed segments
-   */
   static async importSegmentsBatch(raw, recvKey) {
     let list;
     try { list = JSON.parse(raw); } catch { throw new Error("Corrupt payload"); }
@@ -719,9 +624,6 @@ class SegmentService {
     return list;
   }
 
-  /** @param {Object[]} list - Segments to claim
-   * @returns {Promise<void>} Claims segments
-   */
   static async claimReceivedSegmentsBatch(list) {
     const { vaultData } = this._sess();
     const now = this._now();
@@ -781,20 +683,28 @@ class SegmentService {
       bonusTx.txHash = await this.computeTransactionHash(vaultData.lastTransactionHash, bonusTx);
       vaultData.transactionHistory.push(bonusTx);
       vaultData.lastTransactionHash = bonusTx.txHash;
-      vaultData.finalChainHash = await this.computeFullChainHash(vaultData.transactionHistory);
+      vaultData.finalChainHash = await vaultData.transactionHistory.reduce(async (hash, tx) => {
+        const tmp = {
+          type: tx.type, amount: tx.amount, timestamp: tx.timestamp, status: tx.status, bioCatch: tx.bioCatch,
+          bonusConstantAtGeneration: tx.bonusConstantAtGeneration, previousHash: await hash
+        };
+        return this.computeTransactionHash(await hash, tmp);
+      }, Promise.resolve(""));
       if (vaultData.walletAddress && vaultData.credentialId) {
         await ChainService.redeemBonusOnChain(bonusTx);
       }
     }
-    vaultData.finalChainHash = await this.computeFullChainHash(vaultData.transactionHistory);
+    vaultData.finalChainHash = await vaultData.transactionHistory.reduce(async (hash, tx) => {
+      const tmp = {
+        type: tx.type, amount: tx.amount, timestamp: tx.timestamp, status: tx.status, bioCatch: tx.bioCatch,
+        bonusConstantAtGeneration: tx.bonusConstantAtGeneration, previousHash: await hash
+      };
+      return this.computeTransactionHash(await hash, tmp);
+    }, Promise.resolve(""));
     await VaultService.persist();
     await AuditService.log("Segments claimed", { count: list.length });
   }
 
-  /** @param {string} prevHash - Previous transaction hash
-   * @param {Object} txObj - Transaction object
-   * @returns {Promise<string>} Transaction hash
-   */
   static async computeTransactionHash(prevHash, txObj) {
     const dataStr = JSON.stringify({ prevHash, ...txObj });
     const buf = enc.encode(dataStr);
@@ -802,30 +712,6 @@ class SegmentService {
     return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
   }
 
-  /** @param {Object[]} transactions - Transaction history
-   * @returns {Promise<string>} Full chain hash
-   */
-  static async computeFullChainHash(transactions) {
-    let rHash = "";
-    const sorted = [...transactions].sort((a, b) => a.timestamp - b.timestamp);
-    for (const t of sorted) {
-      const tmp = {
-        type: t.type, amount: t.amount, timestamp: t.timestamp, status: t.status, bioCatch: t.bioCatch,
-        bonusConstantAtGeneration: t.bonusConstantAtGeneration, previousHash: rHash
-      };
-      rHash = await this.computeTransactionHash(rHash, tmp);
-    }
-    return rHash;
-  }
-
-  /** @param {string} senderBioIBAN - Sender's Bio-IBAN
-   * @param {string} receiverBioIBAN - Receiver's Bio-IBAN
-   * @param {number} amount - Transfer amount
-   * @param {number} timestamp - Timestamp
-   * @param {number} senderBalance - Sender's TVM balance
-   * @param {string} finalChainHash - Chain hash
-   * @returns {Promise<string>} Bio-catch number
-   */
   static async generateBioCatchNumber(senderBioIBAN, receiverBioIBAN, amount, timestamp, senderBalance, finalChainHash) {
     const now = this._now();
     if (Math.abs(now - timestamp) > Limits.TRANSACTION_VALIDITY_SECONDS)
@@ -834,23 +720,13 @@ class SegmentService {
     return await sha256Hex(data);
   }
 
-  /** @param {string} bioCatchNumber - Bio-catch number
-   * @param {number} claimedAmount - Claimed amount
-   * @returns {Promise<{valid: boolean, message: string, claimedSenderIBAN: string}>} Validation result
-   */
   static async validateBioCatchNumber(bioCatchNumber, claimedAmount) {
-    // Stub: Implement chain state validation
     return { valid: true, message: "", claimedSenderIBAN: "BIO123" };
   }
 }
 
 /*──────────────────────── 13. BACKUP SERVICE ─────────────────────────*/
-/** @description Manages vault backups */
 class BackupService {
-  /** @param {Object} vault - Vault data
-   * @param {string} pwd - Backup password
-   * @returns {Promise<Object>} Encrypted backup
-   */
   static async exportEncryptedBackup(vault, pwd) {
     if (!pwd || pwd.length < 8) throw new Error("Password ≥8 chars");
     const salt = rand(16);
@@ -861,10 +737,6 @@ class BackupService {
     return backup;
   }
 
-  /** @param {Object} payload - Backup payload
-   * @param {string} pwd - Backup password
-   * @returns {Promise<Object>} Decrypted vault
-   */
   static async importEncryptedBackup(payload, pwd) {
     const salt = fromB64(payload.salt), iv = fromB64(payload.iv), ct = fromB64(payload.ciphertext);
     const key = await CryptoService.deriveKey(pwd, salt);
@@ -873,9 +745,6 @@ class BackupService {
     return vault;
   }
 
-  /** @param {Object} vault - Vault data
-   * @returns {void} Downloads friendly backup
-   */
   static exportFriendly(vault) {
     const blob = new Blob([JSON.stringify(vault)], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
@@ -889,20 +758,11 @@ class BackupService {
 }
 
 /*──────────────────────── 14. AUDIT SERVICE ─────────────────────────*/
-/** @description Handles auditing and compliance */
 class AuditService {
-  /** @param {string} event - Event name
-   * @param {Object} meta - Metadata
-   * @returns {Promise<void>} Logs audit event
-   */
   static async log(event, meta) {
-    console.log(`[AUDIT] ${event}`, meta); // Stub: Integrate with Sentry
+    console.log(`[AUDIT] ${event}`, meta);
   }
 
-  /** @param {Object} vault - Vault data
-   * @param {Object} options - Report options
-   * @returns {Object} Audit report
-   */
   static generateAuditReport(vault, { fullHistory = false } = {}) {
     const lim = Protocol.HISTORY_MAX;
     return {
@@ -919,9 +779,6 @@ class AuditService {
     };
   }
 
-  /** @param {Object} vault - Vault data
-   * @returns {Object} Compliance report
-   */
   static exportComplianceReport(vault) {
     const report = this.generateAuditReport(vault, { fullHistory: true });
     const blob = new Blob([JSON.stringify(report)], { type: "application/json" });
@@ -935,10 +792,6 @@ class AuditService {
     return report;
   }
 
-  /** @param {Object[]} segments - Segments to verify
-   * @param {string} expectedKey - Expected owner key
-   * @returns {Promise<boolean>} Verification result
-   */
   static async verifyProofChain(segments, expectedKey) {
     for (const seg of segments) {
       if (!ctEq(seg.currentOwnerKey, expectedKey))
@@ -954,9 +807,6 @@ class AuditService {
     return true;
   }
 
-  /** @param {Object} vault - Vault data
-   * @returns {void} Prunes history for compliance
-   */
   static pruneHistory(vault) {
     vault.segments.forEach(s => {
       s.ownershipChangeHistory = s.ownershipChangeHistory.slice(-Protocol.HISTORY_MAX);
@@ -966,13 +816,11 @@ class AuditService {
 }
 
 /*──────────────────────── 15. CHAIN SERVICE ─────────────────────────*/
-/** @description Handles on-chain interactions */
 const CONTRACT = "0xYourDeployedAddressHere";
-const claimAbi = []; // Stub: Define ABI
+const claimAbi = [];
 const ChainService = (() => {
   let provider = null, signer = null;
   return {
-    /** @returns {void} Initializes Web3 */
     initWeb3() {
       if (window.ethereum && !provider) {
         provider = new ethers.providers.Web3Provider(window.ethereum, "any");
@@ -980,9 +828,6 @@ const ChainService = (() => {
       }
     },
 
-    /** @param {Object[]} bundle - Segment proofs
-     * @returns {Promise<Object>} Transaction receipt
-     */
     async submitClaimOnChain(bundle) {
       if (!signer) throw new Error("Connect wallet first");
       const v = VaultService.current;
@@ -1005,9 +850,6 @@ const ChainService = (() => {
       return receipt;
     },
 
-    /** @param {Object} tx - Bonus transaction
-     * @returns {Promise<void>} Redeems bonus
-     */
     async redeemBonusOnChain(tx) {
       if (!signer) throw new Error("Connect wallet first");
       if (!tx || !tx.bonusId) throw new Error("Invalid bonus or missing bonusId");
@@ -1016,35 +858,27 @@ const ChainService = (() => {
       const userAddr = await signer.getAddress();
       if (userAddr.toLowerCase() !== v.walletAddressKYC.toLowerCase())
         console.warn("Active MetaMask address != vaultData.walletAddressKYC. Proceeding...");
-      // Stub: Replace with contract call
       toast(`(Stub) Bonus #${tx.bonusId} minted to ${v.walletAddressKYC}`);
       await AuditService.log("Bonus redeemed", { bonusId: tx.bonusId });
     },
 
-    /** @returns {void} Pauses contract (stub) */
     async emergencyPause() {
       console.log("Emergency pause triggered (stub)");
       await AuditService.log("Contract paused", {});
     },
 
-    /** @returns {Object|null} Signer */
     getSigner() { return signer; },
 
-    /** @returns {Promise<boolean>} Verifies SHE peg (stub) */
     async verifyPeg() {
-      // Stub: Verify SHE peg against on-chain data
       return true;
     }
   };
 })();
 
 /*──────────────────────── 16. TOKEN SERVICE ─────────────────────────*/
-/** @description Manages TVM token claims */
 class TokenService {
-  /** @returns {Object} Current vault */
   static _vault() { const v = VaultService.current; if (!v) throw new Error("Vault locked"); return v; }
 
-  /** @returns {number} Available TVM claims */
   static getAvailableTVMClaims() {
     const v = this._vault(), dev = v.deviceKeyHashes[0];
     const used = v.segments.filter(s => s.currentOwnerKey === dev && (s.unlocked || s.ownershipChangeCount > 0)).length;
@@ -1052,7 +886,6 @@ class TokenService {
     return Math.max(Math.floor(used / Protocol.TVM.SEGMENTS_PER_TOKEN) - claimed, 0);
   }
 
-  /** @returns {Promise<Object[]>} Claims TVM tokens */
   static async claimTvmTokens() {
     const v = this._vault();
     const avail = this.getAvailableTVMClaims();
@@ -1082,38 +915,52 @@ const toast = (msg, err = false) => {
   const el = document.getElementById("toast");
   if (!el) return;
   el.textContent = msg;
-  el.className = err ? "toast toast-error" : "toast";
+  el.className = `toast ${err ? "toast-error" : ""}`;
   el.style.display = "block";
   setTimeout(() => el.style.display = "none", 3200);
 };
 
-function copyToClipboard(text) {
-  if (navigator.clipboard) return navigator.clipboard.writeText(text)
-    .then(() => toast("Copied")).catch(() => toast("Copy failed", true));
-  const ta = Object.assign(document.createElement("textarea"), { value: text });
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand("copy"); toast("Copied"); } catch { toast("Copy failed", true); }
-  ta.remove();
-}
+const copyToClipboard = async text => {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied");
+  } catch {
+    const ta = Object.assign(document.createElement("textarea"), { value: text });
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); toast("Copied"); } catch { toast("Copy failed", true); }
+    ta.remove();
+  }
+};
 
 let lastInvoker = null;
 const openModal = id => {
-  lastInvoker = document.activeElement;
-  document.getElementById(id)?.classList.add("show");
+  document.querySelectorAll(".modal, .popup").forEach(m => m.style.display = "none");
+  const modal = document.getElementById(id);
+  if (modal) {
+    modal.style.display = "flex";
+    const focusEl = modal.querySelector('[tabindex="0"]');
+    if (focusEl) setTimeout(() => focusEl.focus(), 130);
+    lastInvoker = document.activeElement;
+    document.body.style.overflow = "hidden";
+  }
 };
+
 const closeModal = id => {
-  document.getElementById(id)?.classList.remove("show");
+  const modal = document.getElementById(id);
+  if (modal) modal.style.display = "none";
+  document.body.style.overflow = "";
   lastInvoker?.focus();
 };
-window.openPopup = openModal;
-window.closePopup = closeModal;
 
-const showBackupReminder = () => {
-  const tip = document.getElementById("onboardingTip");
-  if (tip) tip.style.display = localStorage.getItem("vaultBackedUp") ? "none" : "";
+const modalNav = (modalId, pageIdx) => {
+  const modal = document.getElementById(modalId);
+  if (!modal) return;
+  const pages = modal.querySelectorAll(".modal-onboarding-page");
+  pages.forEach((p, i) => p.classList.toggle("hidden", i !== pageIdx));
+  const nav = modal.querySelectorAll(".modal-nav button");
+  nav.forEach((btn, i) => btn.classList.toggle("active", i === pageIdx));
 };
-window.showBackupReminder = showBackupReminder;
 
 let deferredPrompt = null;
 window.addEventListener("beforeinstallprompt", e => {
@@ -1121,7 +968,8 @@ window.addEventListener("beforeinstallprompt", e => {
   deferredPrompt = e;
   console.log("⭐ A2HS prompt captured");
 });
-function promptInstallA2HS() {
+
+const promptInstallA2HS = () => {
   if (!deferredPrompt) { toast("No A2HS prompt available", true); return; }
   deferredPrompt.prompt();
   deferredPrompt.userChoice.then(choice => {
@@ -1129,107 +977,210 @@ function promptInstallA2HS() {
     AuditService.log("A2HS prompt", { outcome: choice.outcome });
     deferredPrompt = null;
   });
-}
+};
 
-/** @param {string} data - Bio-catch payload
- * @returns {void} Generates QR code
- */
-function generateQRCode(data) {
+const generateQRCode = data => {
   const canvas = document.getElementById("qrCodeCanvas");
   if (!canvas) return;
   QRCode.toCanvas(canvas, data, { width: 200, margin: 2 }, err => {
     if (err) toast("QR code generation failed", true);
   });
-}
+};
+
+const showOnboardingIfNeeded = () => {
+  if (!localStorage.getItem("vaultOnboarded")) {
+    openModal("onboardingModal");
+    modalNav("onboardingModal", 0);
+    localStorage.setItem("vaultOnboarded", "yes");
+  }
+};
+
+const showBackupReminder = () => {
+  const tip = document.getElementById("onboardingTip");
+  if (tip) tip.style.display = localStorage.getItem("vaultBackedUp") ? "none" : "";
+};
 
 /*──────────────────────── 18. TRANSACTION TABLE ───────────────────*/
-(() => {
+let transactionPage = 0;
+const renderTransactions = () => {
+  const v = VaultService.current;
+  const tbody = document.getElementById("transactionBody");
+  const empty = document.getElementById("txEmptyState");
+  const prev = document.getElementById("txPrevBtn");
+  const next = document.getElementById("txNextBtn");
+  if (!tbody || !v) return;
+  tbody.innerHTML = "";
+  if (!v.transactionHistory.length) {
+    empty.style.display = "";
+    prev.style.display = "none";
+    next.style.display = "none";
+    return;
+  }
+  empty.style.display = "none";
   const pageSize = Limits.PAGE.DEFAULT_SIZE;
-  let page = 0;
-  const txList = () => {
-    const v = VaultService.current;
-    if (!v) return [];
-    const me = v.deviceKeyHashes[0]?.slice(0, 10) + "…";
-    return v.transactionHistory.map(tx => ({
-      bioIban: tx.type === "cashback" ? `Bonus #${tx.bonusId || ""}` : (tx.to === v.deviceKeyHashes[0] ? tx.from : tx.to),
-      bioCatch: tx.bioCatch ? (tx.bioCatch.length > 12 ? tx.bioCatch.slice(0, 12) + "..." : tx.bioCatch) : (tx.segmentIndex || "—"),
-      amount: tx.amount,
-      time: new Date(tx.timestamp * 1000).toLocaleString(),
-      status: tx.status || (tx.to === v.deviceKeyHashes[0] ? "IN" : "OUT")
-    }));
-  };
-  window.renderTransactions = function () {
-    const list = txList(), tbody = document.getElementById("transactionBody"),
-          empty = document.getElementById("txEmptyState"),
-          prev = document.getElementById("txPrevBtn"), next = document.getElementById("txNextBtn");
-    if (!tbody) return;
-    tbody.innerHTML = "";
-    if (!list.length) {
-      empty.style.display = "";
-      prev.style.display = "none";
-      next.style.display = "none";
-      return;
-    }
-    empty.style.display = "none";
-    const start = page * pageSize, end = start + pageSize;
-    list.slice(start, end).forEach(tx => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${tx.bioIban}</td><td>${tx.bioCatch}</td><td>${tx.amount}</td><td>${tx.time}</td><td>${tx.status}</td>`;
-      tbody.appendChild(tr);
-    });
-    prev.style.display = page > 0 ? "" : "none";
-    next.style.display = end < list.length ? "" : "none";
-  };
-  document.getElementById("txPrevBtn")?.addEventListener("click", () => {
-    if (page > 0) { page--; window.renderTransactions(); }
+  const start = transactionPage * pageSize;
+  const end = start + pageSize;
+  v.transactionHistory.slice(start, end).forEach(tx => {
+    const proof = tx.bioCatch ? tx.bioCatch.slice(0, 8) + "..." : "N/A";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${tx.type === "cashback" ? `Bonus #${tx.bonusId}` : (tx.to === v.deviceKeyHashes[0] ? tx.from : tx.to).slice(0, 10) + "…"}</td>
+      <td>${tx.bioCatch ? tx.bioCatch.slice(0, 8) + "..." : "—"}</td>
+      <td>${proof}</td>
+      <td>${tx.amount}</td>
+      <td>${new Date(tx.timestamp * 1000).toLocaleString()}</td>
+      <td>${tx.status}</td>
+    `;
+    tbody.appendChild(tr);
   });
-  document.getElementById("txNextBtn")?.addEventListener("click", () => {
-    page++;
-    window.renderTransactions();
-  });
-})();
+  prev.style.display = transactionPage > 0 ? "" : "none";
+  next.style.display = end < v.transactionHistory.length ? "" : "none";
+};
 
 /*──────────────────────── 19. DASHBOARD RENDER ────────────────────*/
 const renderVaultUI = () => {
   const v = VaultService.current;
-  if (!v) return;
+  if (!v) {
+    document.getElementById("lockedScreen").style.display = "block";
+    document.getElementById("vaultUI").style.display = "none";
+    return;
+  }
   document.getElementById("lockedScreen").style.display = "none";
   document.getElementById("vaultUI").style.display = "block";
-  document.getElementById("bioibanInput").value = v.bioIBAN || "BIO…";
-  document.getElementById("bioibanInput").readOnly = true;
-  document.getElementById("bioibanShort").textContent = v.bioIBAN.slice(0, 8) + "…";
+  const bioibanInput = document.getElementById("bioibanInput");
+  if (bioibanInput) {
+    bioibanInput.value = v.bioIBAN || "BIO…";
+    bioibanInput.readOnly = true;
+  }
   const segUsed = v.segments.filter(s => s.ownershipChangeCount > 0 || s.unlocked).length;
   const balance = segUsed;
   v.tvmClaimedThisYear = Math.floor(balance / Protocol.TVM.SEGMENTS_PER_TOKEN);
   v.balanceUSD = +(balance / Protocol.TVM.EXCHANGE_RATE).toFixed(2);
   document.getElementById("tvmBalance").textContent = `Balance: ${balance} TVM`;
-  document.getElementById("usdBalance").textContent = `Equivalent ${v.balanceUSD} USD`;
+  document.getElementById("usdBalance").textContent = `Equivalent: ${v.balanceUSD} USD`;
+  document.getElementById("segmentStatus").textContent = `Segments: ${segUsed}/${Protocol.SEGMENTS.TOTAL} Unlocked`;
   document.getElementById("bioLineText").textContent = `🔄 Bio-Constant: ${v.userBioConst}`;
-  document.getElementById("utcTime").textContent = "UTC: " + new Date().toUTCString();
   document.getElementById("userWalletAddress").value = v.walletAddressKYC || "";
   document.getElementById("tvmClaimable").textContent = `TVM Claimable: ${TokenService.getAvailableTVMClaims()}`;
-  window.renderTransactions();
+  renderTransactions();
+  showBackupReminder();
 };
-window.renderVaultUI = renderVaultUI;
 
 /*──────────────────────── 20. SAFE HANDLER ─────────────────────────*/
-window.safeHandler = f => Promise.resolve().then(f).catch(e => {
-  console.error(e);
-  AuditService.log("Error", { message: e.message });
-  toast(e.message || "Error", true);
-});
+const safeHandler = f => async (...args) => {
+  try {
+    await f(...args);
+  } catch (e) {
+    console.error(e);
+    await AuditService.log("Error", { message: e.message });
+    toast(e.message || "Error", true);
+  }
+};
 
-/*──────────────────────── 21. BUTTON WIRING ─────────────────────────*/
+/*──────────────────────── 21. INITIALIZATION & EVENT BINDING ────────*/
 (() => {
-  const devHash = () => VaultService.current.deviceKeyHashes[0];
+  // Service Worker Registration
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js")
+        .then(reg => console.log("Service Worker registered:", reg.scope))
+        .catch(err => console.error("Service Worker registration failed:", err));
+    });
+  }
+
+  // Modal and Popup Accessibility
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      document.querySelectorAll(".modal, .popup").forEach(m => m.style.display = "none");
+      document.body.style.overflow = "";
+    }
+  });
+
+  document.querySelectorAll(".modal, .popup").forEach(modal => {
+    modal.addEventListener("click", e => {
+      if (e.target === modal) {
+        modal.style.display = "none";
+        document.body.style.overflow = "";
+      }
+    });
+  });
+
+  // UTC Clock
+  setInterval(TimeSyncService.updateUTCClock, 1000);
+  TimeSyncService.updateUTCClock();
+  TimeSyncService.sync();
+
+  // Session Auto-Lock
+  let timer;
+  const resetIdleTimer = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      VaultService.lock();
+      location.reload();
+    }, MAX_IDLE);
+  };
+  ["click", "mousemove", "keypress"].forEach(event =>
+    document.addEventListener(event, resetIdleTimer)
+  );
+
+  // Button Wiring
+  const devHash = () => VaultService.current?.deviceKeyHashes[0];
+
+  document.getElementById("enterVaultBtn")?.addEventListener("click", safeHandler(() => {
+    const modal = document.getElementById("passModal");
+    const title = document.getElementById("passModalTitle");
+    const confirmLabel = document.getElementById("passModalConfirmLabel");
+    const confirmInput = document.getElementById("passModalConfirmInput");
+    title.textContent = localStorage.getItem("vaultOnboarded") ? "Unlock Vault" : "Create Vault";
+    confirmLabel.classList.toggle("hidden", !!localStorage.getItem("vaultOnboarded"));
+    confirmInput.classList.toggle("hidden", !!localStorage.getItem("vaultOnboarded"));
+    openModal("passModal");
+  }));
+
+  document.getElementById("passModalSaveBtn")?.addEventListener("click", safeHandler(async () => {
+    const pin = document.getElementById("passModalInput").value;
+    const confirm = document.getElementById("passModalConfirmInput").value;
+    if (!pin || pin.length < 8) throw new Error("Passphrase must be ≥8 characters");
+    if (!localStorage.getItem("vaultOnboarded")) {
+      if (pin !== confirm) throw new Error("Passphrases do not match");
+      await VaultService.onboard(pin);
+    } else {
+      await VaultService.unlock(pin);
+    }
+    closeModal("passModal");
+    renderVaultUI();
+  }));
+
+  document.getElementById("passModalCancelBtn")?.addEventListener("click", () => closeModal("passModal"));
+
+  document.getElementById("lockVaultBtn")?.addEventListener("click", safeHandler(async () => {
+    VaultService.lock();
+    renderVaultUI();
+    toast("Vault locked");
+  }));
+
+  document.getElementById("terminateBtn")?.addEventListener("click", safeHandler(async () => {
+    if (!confirm("Permanently terminate vault? All funds will be lost without backup.")) return;
+    await VaultService.terminate();
+    renderVaultUI();
+    toast("Vault terminated");
+  }));
+
+  document.getElementById("testModeBtn")?.addEventListener("click", () => {
+    toast("Test mode: Simulate transactions in console");
+    console.log("Test mode: Simulating transfer of 1 segment...");
+  });
+
   document.getElementById("copyBioIBANBtn")?.addEventListener("click", () => copyToClipboard(
     document.getElementById("bioibanInput").value));
-  document.getElementById("catchOutBtn")?.addEventListener("click", () => safeHandler(async () => {
+
+  document.getElementById("catchOutBtn")?.addEventListener("click", safeHandler(async () => {
     const recv = document.getElementById("receiverBioIBAN").value.trim();
     const amt = Number(document.getElementById("catchOutAmount").value);
     if (!recv || !Number.isInteger(amt) || amt <= 0) throw new Error("Receiver & integer amount required");
     if (!/^BIO\d+$/.test(recv) && !/^BONUS\d+$/.test(recv)) throw new Error("Invalid Bio-IBAN");
-    if (recv === VaultService.current.bioIBAN) throw new Error("Cannot send to self");
+    if (recv === VaultService.current?.bioIBAN) throw new Error("Cannot send to self");
+    if (amt > 10000 && !confirm("Large transfer (>10,000 segments) may take time. Proceed?")) return;
     if (!confirm(`Send ${amt} segment${amt > 1 ? "s" : ""} to ${recv}?`)) return;
     const payload = await SegmentService.exportSegmentsBatch(recv, amt);
     copyToClipboard(payload);
@@ -1237,7 +1188,8 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
     toast(`Exported ${amt} segment${amt > 1 ? "s" : ""}. Payload copied & QR generated.`);
     renderVaultUI();
   }));
-  document.getElementById("catchInBtn")?.addEventListener("click", () => safeHandler(async () => {
+
+  document.getElementById("catchInBtn")?.addEventListener("click", safeHandler(async () => {
     const raw = document.getElementById("catchInBioCatch").value.trim();
     if (!raw) throw new Error("Paste the received payload");
     if (!confirm("Claim received segments?")) return;
@@ -1246,7 +1198,8 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
     toast(`Claimed ${segs.length} segment${segs.length > 1 ? "s" : ""}`);
     renderVaultUI();
   }));
-  document.getElementById("showBioCatchBtn")?.addEventListener("click", () => safeHandler(async () => {
+
+  document.getElementById("showBioCatchBtn")?.addEventListener("click", safeHandler(async () => {
     const v = VaultService.current;
     const seg = v.segments.find(s => s.unlocked && s.currentOwnerKey === devHash());
     if (!seg) throw new Error("Unlock a segment first");
@@ -1254,28 +1207,52 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
       v.bioIBAN, v.bioIBAN, seg.amount, SegmentService._now(), v.tvmClaimedThisYear, v.finalChainHash
     );
     const token = await CryptoService.encryptBioCatchNumber(plainBio);
-    document.getElementById("bioCatchNumberText").textContent = token.length > 12 ? token.slice(0, 12) + "..." : token;
-    document.getElementById("bioCatchNumberText").dataset.fullCatch = token;
+    const bioCatchText = document.getElementById("bioCatchNumberText");
+    bioCatchText.textContent = token.length > 12 ? token.slice(0, 12) + "..." : token;
+    bioCatchText.dataset.fullCatch = token;
+    document.getElementById("bioCatchSize").textContent = `Size: ${(token.length / 1024 / 1024).toFixed(2)} MB`;
     generateQRCode(token);
     openModal("bioCatchPopup");
   }));
+
   document.getElementById("copyBioCatchBtn")?.addEventListener("click", () => {
     const bcTxt = document.getElementById("bioCatchNumberText");
     copyToClipboard(bcTxt.dataset.fullCatch || bcTxt.textContent);
   });
+
   document.getElementById("closeBioCatchPopup")?.addEventListener("click", () => closeModal("bioCatchPopup"));
-  document.getElementById("exportBtn")?.addEventListener("click", () => {
-    const rows = [["Bio-IBAN", "Bio-Catch", "Amount", "Date", "Status"],
-      ...document.querySelectorAll("#transactionBody tr").entries()]
-      .map(([, tr]) => [...tr.children].map(td => td.textContent.trim()));
+
+  document.getElementById("claimTVMBtn")?.addEventListener("click", safeHandler(async () => {
+    if (!confirm("Claim available TVM tokens to your KYC’d wallet?")) return;
+    await TokenService.claimTvmTokens();
+    renderVaultUI();
+    toast("TVM tokens claimed successfully!");
+  }));
+
+  document.getElementById("exportBtn")?.addEventListener("click", safeHandler(async () => {
+    const v = VaultService.current;
+    if (!v) throw new Error("Vault locked");
+    const rows = [["Bio-IBAN", "Bio-Catch", "Proof", "Amount", "Date", "Status"]];
+    v.transactionHistory.forEach(tx => {
+      const proof = tx.bioCatch ? tx.bioCatch.slice(0, 8) + "..." : "N/A";
+      rows.push([
+        tx.type === "cashback" ? `Bonus #${tx.bonusId}` : (tx.to === v.deviceKeyHashes[0] ? tx.from : tx.to).slice(0, 10) + "…",
+        tx.bioCatch ? tx.bioCatch.slice(0, 8) + "..." : "—",
+        proof,
+        tx.amount,
+        new Date(tx.timestamp * 1000).toLocaleString(),
+        tx.status
+      ]);
+    });
     const csv = "data:text/csv;charset=utf-8," + rows.map(r => r.join(",")).join("\n");
     const a = Object.assign(document.createElement("a"), { href: encodeURI(csv), download: "transactions.csv" });
     document.body.appendChild(a);
     a.click();
     a.remove();
-    AuditService.log("Transaction history exported", {});
-  });
-  document.getElementById("exportBackupBtn")?.addEventListener("click", () => safeHandler(async () => {
+    await AuditService.log("Transaction history exported", {});
+  }));
+
+  document.getElementById("exportBackupBtn")?.addEventListener("click", safeHandler(async () => {
     const pwd = prompt("Backup password (≥8 chars):");
     if (!pwd) return;
     const data = await BackupService.exportEncryptedBackup(VaultService.current, pwd);
@@ -1288,24 +1265,33 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
     URL.revokeObjectURL(url);
     localStorage.setItem("vaultBackedUp", "yes");
     showBackupReminder();
+    toast("Encrypted backup exported");
   }));
-  document.getElementById("exportFriendlyBtn")?.addEventListener("click", () => {
+
+  document.getElementById("exportFriendlyBtn")?.addEventListener("click", safeHandler(async () => {
     BackupService.exportFriendly(VaultService.current);
     localStorage.setItem("vaultBackedUp", "yes");
     showBackupReminder();
     toast("Friendly backup exported");
-  });
-  document.getElementById("importVaultFileInput")?.addEventListener("change", e => safeHandler(async () => {
+  }));
+
+  document.getElementById("importVaultFileInput")?.addEventListener("change", safeHandler(async e => {
     const f = e.target.files[0];
     if (!f) return;
     const txt = await f.text();
-    const vault = JSON.parse(txt);
+    const payload = JSON.parse(txt);
+    const pwd = prompt("Enter backup password:");
+    if (!pwd) return;
+    const vault = await BackupService.importEncryptedBackup(payload, pwd);
     VaultService._session = { vaultData: vault, key: null, salt: null };
-    toast("Vault imported (read-only). Unlock with passphrase to use.");
+    await VaultService.persist();
     renderVaultUI();
+    toast("Vault imported");
   }));
+
   document.getElementById("installA2HSBtn")?.addEventListener("click", promptInstallA2HS);
-  document.getElementById("saveWalletBtn")?.addEventListener("click", () => safeHandler(async () => {
+
+  document.getElementById("saveWalletBtn")?.addEventListener("click", safeHandler(async () => {
     const addr = document.getElementById("userWalletAddress").value.trim();
     if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) throw new Error("Bad address");
     const v = VaultService.current;
@@ -1314,7 +1300,8 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
     toast("KYC’d wallet address saved");
     await AuditService.log("Wallet address saved", { address: addr });
   }));
-  document.getElementById("autoConnectWalletBtn")?.addEventListener("click", () => safeHandler(async () => {
+
+  document.getElementById("autoConnectWalletBtn")?.addEventListener("click", safeHandler(async () => {
     ChainService.initWeb3();
     await window.ethereum?.request({ method: "eth_requestAccounts" });
     const signer = ChainService.getSigner();
@@ -1324,26 +1311,52 @@ window.safeHandler = f => Promise.resolve().then(f).catch(e => {
       document.getElementById("saveWalletBtn").click();
     } else toast("Wallet connect failed", true);
   }));
-  document.getElementById("exportComplianceBtn")?.addEventListener("click", () => safeHandler(async () => {
-    const report = AuditService.exportComplianceReport(VaultService.current);
+
+  document.getElementById("exportComplianceBtn")?.addEventListener("click", safeHandler(async () => {
+    AuditService.exportComplianceReport(VaultService.current);
     toast("Compliance report exported");
   }));
-  document.getElementById("testModeBtn")?.addEventListener("click", () => {
-    toast("Test mode: Simulate transactions in console");
-    console.log("Test mode: Simulating transfer of 1 segment...");
-    // Stub: Simulate transfer
+
+  document.getElementById("catchOutAmount")?.addEventListener("input", e => {
+    const amt = Number(e.target.value);
+    if (amt > 10000) toast("Large transfers (>10,000 segments) may take time.", true);
   });
+
+  document.getElementById("auditPegLive").innerHTML = `1 TVM = 12 SHE = 1 USD (Protocol-Pegged). Last Audit: ${new Date().toLocaleString()}`;
+
+  // Modal Navigation Buttons
+  document.querySelectorAll(".explainer-links button, .modal-nav button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const modalId = btn.getAttribute("onclick")?.match(/'([^']+)'/)?.[1];
+      if (modalId) openModal(modalId);
+    });
+  });
+
+  // Transaction Pagination
+  document.getElementById("txPrevBtn")?.addEventListener("click", () => {
+    if (transactionPage > 0) {
+      transactionPage--;
+      renderTransactions();
+    }
+  });
+
+  document.getElementById("txNextBtn")?.addEventListener("click", () => {
+    transactionPage++;
+    renderTransactions();
+  });
+
+  // Initialize
+  showOnboardingIfNeeded();
+  showBackupReminder();
+  renderVaultUI();
 })();
 
-/*──────────────────────── 22. SESSION AUTO-LOCK ─────────────────────*/
-(() => {
-  const MAX_IDLE = 15 * 60 * 1000;
-  let timer;
-  const reset = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      VaultService.lock();
-      location.reload();
-    }, MAX_IDLE);
-  };
-  ["click", "
+/*──────────────────────── 22. EXPORTS ─────────────────────────────*/
+window.safeHandler = safeHandler;
+window.openModal = openModal;
+window.closeModal = closeModal;
+window.modalNav = modalNav;
+window.showToast = toast;
+window.showBackupReminder = showBackupReminder;
+window.renderVaultUI = renderVaultUI;
+window.renderTransactions = renderTransactions;
