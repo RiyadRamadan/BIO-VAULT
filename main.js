@@ -6,7 +6,7 @@
 // TODO: Split into modules (crypto.js, vault.js, segment.js, etc.) for better maintainability
 
 /*──────────────────────── 1. CONSTANTS ───────────────────────────────*/
-const GENESIS_TIMESTAMP = 1752624000; // Correct timestamp for July 16, 2025, 00:00:00 UTC
+const GENESIS_TIMESTAMP = 1736565605; 
 const Protocol = Object.freeze({
   GENESIS_BIO_CONST: GENESIS_TIMESTAMP,
   SEGMENTS: Object.freeze({
@@ -428,6 +428,7 @@ class VaultService {
       },
       walletAddress: "",
       walletAddressKYC: "",
+      walletKeyHashBinding: null, // New: Hash of (walletAddress + bioIBAN) for binding
       tvmClaimedThisYear: 0,
       lastClaimYear: new Date(now * 1000).getUTCFullYear(), // Added for annual reset
       transactionHistory: [],
@@ -490,6 +491,16 @@ class VaultService {
     await this.persist();
     await AuditService.log("Vault unlocked", { bioIBAN: vault.bioIBAN.slice(0,8) + '...' });
     return vault;
+  }
+
+  static async bindWalletToKeyHash(walletAddress) {
+    const { vaultData } = this._sess();
+    if (vaultData.walletKeyHashBinding) throw new Error("Wallet already bound to this device");
+    const bindingHash = await sha256Hex(walletAddress + vaultData.bioIBAN);
+    vaultData.walletKeyHashBinding = bindingHash;
+    vaultData.walletAddressKYC = walletAddress;
+    await this.persist();
+    await AuditService.log("Wallet bound to key hash", { bindingHash: bindingHash.slice(0,8) + '...' });
   }
 
   static lock() { this._session = null; }
@@ -786,6 +797,25 @@ class SegmentService {
     if (parsed.receiverBioIBAN !== myIBAN) return { valid: false, message: "Receiver mismatch" };
     return { valid: true, message: "", claimedSenderIBAN: parsed.senderBioIBAN };
   }
+
+  // New: Exchange offline segments to TVM on-chain
+  static async exchangeOfflineToTVM(count) {
+    const avail = TokenService.getAvailableTVMClaims();
+    if (avail < count) throw new Error("Insufficient offline balance for exchange");
+    const bundle = TokenService.prepareClaimBundle(count * Protocol.TVM.SEGMENTS_PER_TOKEN);
+    await ChainService.submitClaimOnChain(bundle);
+    toast(`Exchanged ${count} TVM from offline balance`);
+  }
+
+  // New: Send TVM to contract for offline segments
+  static async sendTVMToContractForOffline(amount) {
+    const { vaultData } = this._sess();
+    const receipt = await ChainService.sendTVMToContract(amount, vaultData.bioIBAN);
+    // Parse receipt for emitted event with segments/proofs
+    const { segmentsProof } = receipt.events.ExchangeToOffline.returnValues; // Assume event
+    await this.claimReceivedSegmentsBatch(segmentsProof); // Import the returned segments
+    toast(`Sent ${amount} TVM to contract for offline balance`);
+  }
 }
 
 /*──────────────────────── 13. BACKUP SERVICE ─────────────────────────*/
@@ -885,9 +915,14 @@ class AuditService {
 
 /*──────────────────────── 15. CHAIN SERVICE ─────────────────────────*/
 const CONTRACT = "0xYourDeployedAddressHere"; // Point 9: Replace with real (audited contract)
+const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7"; // Mainnet USDT example
 const claimAbi = [ 
   "function claimTVM(tuple(uint32 segmentIndex, bytes32 spentProof, bytes32 ownershipProof, bytes32 unlockIntegrityProof)[] segmentProofs, bytes signature) external",
-  "function redeemBonus(address wallet, uint bonusId) external returns (uint)"
+  "function redeemBonus(address wallet, uint bonusId) external returns (uint)",
+  "function exchangeToOffline(uint256 amount, string calldata keyHash) external", // New: Send TVM to contract, emit for offline
+  "function depositUSDT(uint256 amount) external", // New: Deposit USDT, mint TVM
+  "function withdrawUSDT(uint256 amount) external", // New: Send TVM to contract, transfer USDT if available
+  "event ExchangeToOffline(address user, uint256 amount, string keyHash, bytes segmentsProof)"
 ];
 const ChainService = (() => {
   let provider = null, signer = null;
@@ -904,6 +939,7 @@ const ChainService = (() => {
       const v = VaultService.current;
       if (!v.walletAddressKYC || !/^0x[a-fA-F0-9]{40}$/.test(v.walletAddressKYC))
         throw new Error("KYC’d wallet address required. Verify via providers like Sumsub or ComplyCube.");
+      if (v.walletKeyHashBinding !== await sha256Hex(v.walletAddressKYC + v.bioIBAN)) throw new Error("Wallet not bound to this device");
       const domain = { name: "TVMClaim", version: "1", chainId: await signer.getChainId(), verifyingContract: CONTRACT };
       const types = {
         SegmentProof: [
@@ -946,6 +982,37 @@ const ChainService = (() => {
       await AuditService.log("Bonus redeemed", { bonusId: tx.bonusId });
     },
 
+    async sendTVMToContract(amount, keyHash) {
+      if (!signer) throw new Error("Connect wallet first");
+      const tvmContract = new ethers.Contract(CONTRACT, ["function approve(address spender, uint256 amount) external returns (bool)", "function transfer(address to, uint256 amount) external returns (bool)"], signer);
+      await tvmContract.approve(CONTRACT, amount);
+      await tvmContract.transfer(CONTRACT, amount);
+      const contract = new ethers.Contract(CONTRACT, claimAbi, signer);
+      const tx = await contract.exchangeToOffline(amount, keyHash, { gasLimit: 300000 });
+      return await tx.wait();
+    },
+
+    async depositUSDT(amount) {
+      if (!signer) throw new Error("Connect wallet first");
+      const usdtContract = new ethers.Contract(USDT_ADDRESS, ["function approve(address spender, uint256 amount) external returns (bool)"], signer);
+      await usdtContract.approve(CONTRACT, amount);
+      const contract = new ethers.Contract(CONTRACT, claimAbi, signer);
+      const tx = await contract.depositUSDT(amount, { gasLimit: 400000 });
+      await tx.wait();
+      toast(`Deposited ${amount} USDT for TVM`);
+    },
+
+    async withdrawUSDT(amount) {
+      if (!signer) throw new Error("Connect wallet first");
+      const tvmContract = new ethers.Contract(CONTRACT, ["function approve(address spender, uint256 amount) external returns (bool)", "function transfer(address to, uint256 amount) external returns (bool)"], signer);
+      await tvmContract.approve(CONTRACT, amount);
+      await tvmContract.transfer(CONTRACT, amount);
+      const contract = new ethers.Contract(CONTRACT, claimAbi, signer);
+      const tx = await contract.withdrawUSDT(amount, { gasLimit: 300000 });
+      await tx.wait();
+      toast(`Withdrew ${amount} USDT from TVM`);
+    },
+
     async emergencyPause() {
       console.log("Emergency pause triggered (stub)");
       await AuditService.log("Contract paused", {});
@@ -971,6 +1038,17 @@ class TokenService {
     return Math.max(Math.floor(used / Protocol.TVM.SEGMENTS_PER_TOKEN) - claimed, 0);
   }
 
+  static prepareClaimBundle(needed) {
+    const v = this._vault();
+    const segs = v.segments.filter(s => s.ownershipChangeCount > 0 || s.unlocked).slice(0, needed);
+    return segs.map(s => ({
+      segmentIndex: s.segmentIndex,
+      spentProof: s.spentProof,
+      ownershipProof: s.ownershipProof,
+      unlockIntegrityProof: s.unlockIntegrityProof
+    }));
+  }
+
   static async claimTvmTokens() {
     const v = this._vault();
     const avail = this.getAvailableTVMClaims();
@@ -980,13 +1058,7 @@ class TokenService {
     if ((v.tvmClaimedThisYear || 0) + avail > Protocol.TVM.CLAIM_CAP)
       throw new Error("Yearly TVM cap reached");
     const needed = avail * Protocol.TVM.SEGMENTS_PER_TOKEN;
-    const segs = v.segments.filter(s => s.ownershipChangeCount > 0 || s.unlocked).slice(0, needed);
-    const bundle = segs.map(s => ({
-      segmentIndex: s.segmentIndex,
-      spentProof: s.spentProof,
-      ownershipProof: s.ownershipProof,
-      unlockIntegrityProof: s.unlockIntegrityProof
-    }));
+    const bundle = this.prepareClaimBundle(needed);
     if (await ChainService.verifyPeg() !== true) throw new Error("Peg verification failed");
     await ChainService.submitClaimOnChain(bundle);
     v.tvmClaimedThisYear += avail;
@@ -1324,6 +1396,35 @@ const safeHandler = f => async (...args) => {
     toast("TVM tokens claimed successfully!");
   }));
 
+  // New buttons for exchanges
+  document.getElementById("exchangeOfflineToTVMBtn")?.addEventListener("click", safeHandler(async () => {
+    const amount = Number(prompt("Amount of TVM to exchange from offline:"));
+    if (!amount || amount <= 0) return;
+    await SegmentService.exchangeOfflineToTVM(amount);
+    renderVaultUI();
+  }));
+
+  document.getElementById("sendTVMToContractForOfflineBtn")?.addEventListener("click", safeHandler(async () => {
+    const amount = Number(prompt("Amount of TVM to send to contract for offline:"));
+    if (!amount || amount <= 0) return;
+    await SegmentService.sendTVMToContractForOffline(amount);
+    renderVaultUI();
+  }));
+
+  document.getElementById("depositUSDTBtn")?.addEventListener("click", safeHandler(async () => {
+    const amount = Number(prompt("Amount of USDT to deposit for TVM:"));
+    if (!amount || amount <= 0) return;
+    await ChainService.depositUSDT(amount);
+    renderVaultUI();
+  }));
+
+  document.getElementById("withdrawUSDTBtn")?.addEventListener("click", safeHandler(async () => {
+    const amount = Number(prompt("Amount of TVM to send to contract for USDT:"));
+    if (!amount || amount <= 0) return;
+    await ChainService.withdrawUSDT(amount);
+    renderVaultUI();
+  }));
+
   document.getElementById("exportBtn")?.addEventListener("click", safeHandler(async () => {
     const v = VaultService.current;
     if (!v) throw new Error("Vault locked");
@@ -1390,10 +1491,8 @@ const safeHandler = f => async (...args) => {
     const addr = document.getElementById("userWalletAddress").value.trim();
     if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) throw new Error("Bad address");
     alert("Ensure this wallet is KYC-verified via providers like Sumsub, ComplyCube, or Onfido before saving.");
-    const v = VaultService.current;
-    v.walletAddressKYC = addr;
-    await VaultService.persist();
-    toast("KYC’d wallet address saved");
+    await VaultService.bindWalletToKeyHash(addr);
+    toast("KYC’d wallet address saved and bound");
     await AuditService.log("Wallet address saved", { address: addr.slice(0,6) + '...' + addr.slice(-4) });
   }));
 
@@ -1466,4 +1565,3 @@ window.renderTransactions = renderTransactions;
 //   expect(result.valid).toBe(true);
 // });
 
-// More tests...
